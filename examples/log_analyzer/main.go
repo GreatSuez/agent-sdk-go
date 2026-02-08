@@ -23,7 +23,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -36,7 +35,7 @@ import (
 	providerfactory "github.com/PipeOpsHQ/agent-sdk-go/framework/providers/factory"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/state"
 	statefactory "github.com/PipeOpsHQ/agent-sdk-go/framework/state/factory"
-	"github.com/PipeOpsHQ/agent-sdk-go/framework/tools"
+	fwtools "github.com/PipeOpsHQ/agent-sdk-go/framework/tools"
 )
 
 const logAnalyzerPrompt = `You are an expert log analyst and software engineer.
@@ -332,64 +331,55 @@ func redactSensitiveData(logs string) string {
 }
 
 func cloneRepo(ctx context.Context, repoURL, branch string) (string, error) {
-	// Create temp directory for the repo
-	repoName := extractRepoName(repoURL)
-	baseDir := filepath.Join(os.TempDir(), "log-analyzer-repos")
-	if err := os.MkdirAll(baseDir, 0755); err != nil {
-		return "", fmt.Errorf("create repos dir: %w", err)
+	// Use the built-in git_repo tool to clone the repository
+	gitRepoTool, err := fwtools.BuildSelection([]string{"git_repo"})
+	if err != nil || len(gitRepoTool) == 0 {
+		return "", fmt.Errorf("git_repo tool not available: %v", err)
 	}
 
-	localPath := filepath.Join(baseDir, repoName)
-
-	// Check if already cloned
-	if _, err := os.Stat(filepath.Join(localPath, ".git")); err == nil {
-		// Pull latest
-		cmd := exec.CommandContext(ctx, "git", "-C", localPath, "pull", "--ff-only")
-		cmd.Run() // Ignore errors
-		return localPath, nil
+	args := map[string]any{
+		"url":       repoURL,
+		"operation": "clone",
+		"depth":     1,
 	}
-
-	// Clone the repo
-	args := []string{"clone", "--depth", "1"}
 	if branch != "" {
-		args = append(args, "--branch", branch)
+		args["branch"] = branch
 	}
-	args = append(args, repoURL, localPath)
 
-	cmd := exec.CommandContext(ctx, "git", args...)
-	output, err := cmd.CombinedOutput()
+	argsJSON, err := json.Marshal(args)
 	if err != nil {
-		return "", fmt.Errorf("git clone failed: %v - %s", err, string(output))
+		return "", fmt.Errorf("marshal git_repo args: %w", err)
 	}
 
-	return localPath, nil
-}
-
-func extractRepoName(url string) string {
-	// Handle SSH format: git@github.com:owner/repo.git
-	if strings.Contains(url, ":") && strings.Contains(url, "@") {
-		parts := strings.Split(url, ":")
-		if len(parts) >= 2 {
-			path := parts[len(parts)-1]
-			pathParts := strings.Split(path, "/")
-			if len(pathParts) > 0 {
-				return strings.TrimSuffix(pathParts[len(pathParts)-1], ".git")
-			}
-		}
+	result, err := gitRepoTool[0].Execute(ctx, argsJSON)
+	if err != nil {
+		return "", fmt.Errorf("git_repo clone failed: %w", err)
 	}
 
-	// Handle HTTPS format
-	parts := strings.Split(url, "/")
-	if len(parts) > 0 {
-		return strings.TrimSuffix(parts[len(parts)-1], ".git")
+	// Extract local path from result
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		return "", fmt.Errorf("marshal git_repo result: %w", err)
 	}
 
-	return "repo"
+	var gitResult struct {
+		Success   bool   `json:"success"`
+		LocalPath string `json:"localPath"`
+		Error     string `json:"error"`
+	}
+	if err := json.Unmarshal(resultJSON, &gitResult); err != nil {
+		return "", fmt.Errorf("unmarshal git_repo result: %w", err)
+	}
+	if !gitResult.Success {
+		return "", fmt.Errorf("git clone failed: %s", gitResult.Error)
+	}
+
+	return gitResult.LocalPath, nil
 }
 
 func generateFixes(ctx context.Context, provider llm.Provider, store state.Store, observer observe.Sink, analysis, repoPath string) (string, error) {
 	// Get relevant tools for code modification
-	selectedTools, err := tools.BuildSelection([]string{"file_system", "code_search"})
+	selectedTools, err := fwtools.BuildSelection([]string{"file_system", "code_search"})
 	if err != nil {
 		return "", fmt.Errorf("build tools: %w", err)
 	}
@@ -443,23 +433,53 @@ func createPullRequest(ctx context.Context, provider llm.Provider, store state.S
 		return "", fmt.Errorf("GITHUB_TOKEN environment variable is required for PR creation")
 	}
 
+	// Get the shell_command tool for git operations
+	shellTools, err := fwtools.BuildSelection([]string{"shell_command"})
+	if err != nil || len(shellTools) == 0 {
+		return "", fmt.Errorf("shell_command tool not available: %v", err)
+	}
+	shellTool := shellTools[0]
+
+	runShell := func(command string, args []string, workingDir string) (string, error) {
+		shellArgs, _ := json.Marshal(map[string]any{
+			"command":    command,
+			"args":       args,
+			"workingDir": workingDir,
+			"timeout":    60,
+		})
+		result, execErr := shellTool.Execute(ctx, shellArgs)
+		if execErr != nil {
+			return "", execErr
+		}
+		resultJSON, _ := json.Marshal(result)
+		var sr struct {
+			Success bool   `json:"success"`
+			Stdout  string `json:"stdout"`
+			Stderr  string `json:"stderr"`
+			Error   string `json:"error"`
+		}
+		json.Unmarshal(resultJSON, &sr)
+		if !sr.Success {
+			return sr.Stdout, fmt.Errorf("%s %s", sr.Stderr, sr.Error)
+		}
+		return sr.Stdout, nil
+	}
+
 	// Create a new branch
 	branchName := fmt.Sprintf("fix/log-analysis-%d", time.Now().Unix())
 
-	// Create branch
-	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "checkout", "-b", branchName)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("create branch: %v - %s", err, string(output))
+	if _, err := runShell("git", []string{"checkout", "-b", branchName}, repoPath); err != nil {
+		return "", fmt.Errorf("create branch: %w", err)
 	}
 
 	// Apply fixes using the agent
-	selectedTools, err := tools.BuildSelection([]string{"file_system"})
+	selectedTools, err := fwtools.BuildSelection([]string{"file_system"})
 	if err != nil {
 		return "", fmt.Errorf("build tools: %w", err)
 	}
 
 	opts := []agentfw.Option{
-		agentfw.WithSystemPrompt(`You are applying code fixes to files. 
+		agentfw.WithSystemPrompt(`You are applying code fixes to files.
 Use the file_system tool with operation "write" to apply each fix.
 Be precise and only modify what's necessary.`),
 		agentfw.WithStore(store),
@@ -486,30 +506,25 @@ Use file_system tool to write the fixed files.`, repoPath, fixes)
 		return "", fmt.Errorf("apply fixes: %w", err)
 	}
 
-	// Stage and commit changes
-	cmd = exec.CommandContext(ctx, "git", "-C", repoPath, "add", "-A")
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git add: %v - %s", err, string(output))
+	// Stage and commit changes using shell_command tool
+	if _, err := runShell("git", []string{"add", "-A"}, repoPath); err != nil {
+		return "", fmt.Errorf("git add: %w", err)
 	}
 
 	commitMsg := fmt.Sprintf("%s\n\nAutomated fixes based on log analysis.\n\n## Analysis Summary\n%s", cfg.PRTitle, truncate(analysis, 500))
-	cmd = exec.CommandContext(ctx, "git", "-C", repoPath, "commit", "-m", commitMsg)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		// Check if there are no changes
-		if strings.Contains(string(output), "nothing to commit") {
+	if output, err := runShell("git", []string{"commit", "-m", commitMsg}, repoPath); err != nil {
+		if strings.Contains(output, "nothing to commit") {
 			return "", fmt.Errorf("no changes to commit - fixes may not have been applicable")
 		}
-		return "", fmt.Errorf("git commit: %v - %s", err, string(output))
+		return "", fmt.Errorf("git commit: %w", err)
 	}
 
 	// Push branch
-	cmd = exec.CommandContext(ctx, "git", "-C", repoPath, "push", "-u", "origin", branchName)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("GIT_ASKPASS=echo"), fmt.Sprintf("GIT_PASSWORD=%s", githubToken))
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("git push: %v - %s", err, string(output))
+	if _, err := runShell("git", []string{"push", "-u", "origin", branchName}, repoPath); err != nil {
+		return "", fmt.Errorf("git push: %w", err)
 	}
 
-	// Create PR using GitHub API
+	// Create PR using built-in http_client tool
 	prURL, err := createGitHubPR(ctx, cfg.RepoURL, branchName, cfg.PRTitle, analysis, githubToken)
 	if err != nil {
 		return "", fmt.Errorf("create GitHub PR: %w", err)
@@ -525,7 +540,12 @@ func createGitHubPR(ctx context.Context, repoURL, branchName, title, body, token
 		return "", fmt.Errorf("could not parse GitHub URL: %s", repoURL)
 	}
 
-	// Create PR via GitHub API
+	// Use the built-in http_client tool for the GitHub API call
+	httpTools, err := fwtools.BuildSelection([]string{"http_client"})
+	if err != nil || len(httpTools) == 0 {
+		return "", fmt.Errorf("http_client tool not available: %v", err)
+	}
+
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls", owner, repo)
 
 	prBody := map[string]string{
@@ -534,31 +554,50 @@ func createGitHubPR(ctx context.Context, repoURL, branchName, title, body, token
 		"base":  "main",
 		"body":  fmt.Sprintf("## Automated Log Analysis Fixes\n\n%s", truncate(body, 2000)),
 	}
-
 	jsonBody, _ := json.Marshal(prBody)
 
-	cmd := exec.CommandContext(ctx, "curl", "-s", "-X", "POST",
-		"-H", "Accept: application/vnd.github+json",
-		"-H", fmt.Sprintf("Authorization: Bearer %s", token),
-		"-H", "X-GitHub-Api-Version: 2022-11-28",
-		"-d", string(jsonBody),
-		apiURL)
+	httpArgs, _ := json.Marshal(map[string]any{
+		"url":    apiURL,
+		"method": "POST",
+		"headers": map[string]string{
+			"Accept":               "application/vnd.github+json",
+			"Authorization":        fmt.Sprintf("Bearer %s", token),
+			"X-GitHub-Api-Version": "2022-11-28",
+			"Content-Type":         "application/json",
+		},
+		"body":    string(jsonBody),
+		"timeout": 30,
+	})
 
-	output, err := cmd.Output()
+	result, err := httpTools[0].Execute(ctx, httpArgs)
 	if err != nil {
 		return "", fmt.Errorf("GitHub API call failed: %v", err)
 	}
 
-	var result map[string]any
-	if err := json.Unmarshal(output, &result); err != nil {
+	resultJSON, _ := json.Marshal(result)
+	var httpResp struct {
+		StatusCode int    `json:"statusCode"`
+		Body       string `json:"body"`
+		Error      string `json:"error"`
+	}
+	if err := json.Unmarshal(resultJSON, &httpResp); err != nil {
+		return "", fmt.Errorf("parse http_client response: %w", err)
+	}
+
+	if httpResp.Error != "" {
+		return "", fmt.Errorf("GitHub API call failed: %s", httpResp.Error)
+	}
+
+	var ghResult map[string]any
+	if err := json.Unmarshal([]byte(httpResp.Body), &ghResult); err != nil {
 		return "", fmt.Errorf("parse GitHub response: %w", err)
 	}
 
-	if htmlURL, ok := result["html_url"].(string); ok {
+	if htmlURL, ok := ghResult["html_url"].(string); ok {
 		return htmlURL, nil
 	}
 
-	if errMsg, ok := result["message"].(string); ok {
+	if errMsg, ok := ghResult["message"].(string); ok {
 		return "", fmt.Errorf("GitHub API error: %s", errMsg)
 	}
 

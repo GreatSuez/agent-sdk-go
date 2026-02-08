@@ -187,7 +187,7 @@ func buildDeps(ctx context.Context) (llm.Provider, state.Store, observe.Sink, fu
 }
 
 func buildAgent(provider llm.Provider, store state.Store, observer observe.Sink) (*agentfw.Agent, error) {
-	selected, err := fwtools.BuildSelection([]string{"@default"})
+	selected, err := fwtools.BuildSelection([]string{"@default", "@security"})
 	if err != nil {
 		return nil, err
 	}

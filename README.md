@@ -3,7 +3,7 @@
 `agent-sdk-go` is PipeOps' runtime-first, provider-agnostic framework for building production AI agents in Go.
 
 It combines:
-- A single-agent runtime with middleware, retries, and tool calling
+- Single-agent and multi-agent runtime with middleware, retries, and tool calling
 - Static multi-agent graph orchestration with checkpoint + resume
 - Durable state backends (SQLite, Redis, Hybrid)
 - Distributed execution (coordinator + workers over Redis Streams)
@@ -72,10 +72,13 @@ It combines:
 - Built-in tools and bundles via `framework/tools`
 - Integration catalog metadata (HTTP, Slack, GitHub, Jira, PostgreSQL, Redis, S3, GCS, PagerDuty, SMTP)
 
-### 7) Migration/Parity Path
-- Domain extraction in `app/secops`
-- Adapter + graph implementation for secops flow
-- Parity tests against sample data
+### 7) Example Agents
+- **Log Analyzer**: Multi-agent system for log analysis, fix generation, and PR creation
+- **SecOps Agent**: Security operations with Trivy report analysis and log processing
+- **Prompt Templates**: Demonstration of role-based prompt templates
+- **Custom Tools**: Example of building and registering custom tools
+- **Graph Resume**: Checkpoint and resume workflow patterns
+- **Distributed Enqueue**: Distributed task processing examples
 
 ## Architecture
 
@@ -198,18 +201,39 @@ go run ./cmd/ai-agent-framework ui-admin create-key --role=admin
 
 ## SDK Examples
 
-Examples index:
-- `framework/examples/README.md`
+Examples are self-contained agents demonstrating different patterns:
+
+| Example | Description |
+|---------|-------------|
+| `log_analyzer` | Multi-agent log analysis with PR creation |
+| `secops` | Security operations (Trivy + log analysis) |
+| `prompt_templates` | Role-based prompt templates |
+| `agent_minimal` | Minimal agent setup |
+| `agent_custom_tool` | Custom tool implementation |
+| `graph_resume` | Checkpoint and resume workflows |
+| `distributed_enqueue` | Distributed task processing |
+| `sdk_quickstart` | Quick start template |
 
 Run examples:
 ```bash
+# Log analyzer - analyze logs and create PRs
+go run ./framework/examples/log_analyzer analyze app.log
+go run ./framework/examples/log_analyzer analyze --repo=https://github.com/org/repo app.log
+
+# SecOps - security analysis
+go run ./framework/examples/secops trivy-report.json
+cat logs.txt | go run ./framework/examples/secops
+
+# Other examples
 go run ./framework/examples/agent_minimal
 go run ./framework/examples/agent_custom_tool
+go run ./framework/examples/prompt_templates analyst "analyze this"
 go run ./framework/examples/graph_resume
 go run ./framework/examples/distributed_enqueue
-go run ./framework/examples/secops_sdk sample-data/app.log
 go run ./framework/examples/sdk_quickstart
 ```
+
+See `framework/examples/README.md` for detailed documentation.
 
 ## Make Targets
 

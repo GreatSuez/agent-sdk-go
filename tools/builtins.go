@@ -115,6 +115,35 @@ func init() {
 		"Store and retrieve information across agent interactions with TTL support.",
 		func() Tool { return NewMemoryStore() },
 	)
+	MustRegisterTool(
+		"tmpdir",
+		"Create and manage temporary directories with file read/write support.",
+		func() Tool { return NewTmpDir() },
+	)
+
+	// Container tools
+	MustRegisterTool(
+		"docker",
+		"Manage Docker containers and images: run, stop, build, pull, inspect, logs.",
+		func() Tool { return NewDocker() },
+	)
+	MustRegisterTool(
+		"docker_compose",
+		"Manage Docker Compose services: up, down, build, restart, logs, exec.",
+		func() Tool { return NewDockerCompose() },
+	)
+
+	// Kubernetes tools
+	MustRegisterTool(
+		"kubectl",
+		"Interact with Kubernetes clusters: get, describe, apply, delete, scale, rollout.",
+		func() Tool { return NewKubectl() },
+	)
+	MustRegisterTool(
+		"k3s",
+		"Manage k3s lightweight Kubernetes: install, uninstall, status, kubectl, crictl.",
+		func() Tool { return NewK3s() },
+	)
 
 	// Register bundles
 	MustRegisterBundle("default", "Default built-in toolset", []string{
@@ -154,6 +183,7 @@ func init() {
 		"shell_command",
 		"file_system",
 		"env_vars",
+		"tmpdir",
 	})
 
 	MustRegisterBundle("memory", "State and memory tools", []string{
@@ -164,6 +194,23 @@ func init() {
 		"text_processor",
 		"json_parser",
 		"regex_matcher",
+	})
+
+	MustRegisterBundle("container", "Container tools", []string{
+		"docker",
+		"docker_compose",
+	})
+
+	MustRegisterBundle("kubernetes", "Kubernetes tools", []string{
+		"kubectl",
+		"k3s",
+	})
+
+	MustRegisterBundle("devops", "DevOps tools", []string{
+		"docker",
+		"docker_compose",
+		"kubectl",
+		"k3s",
 	})
 
 	MustRegisterBundle("all", "All available built-in tools", []string{
@@ -186,5 +233,10 @@ func init() {
 		"file_system",
 		"env_vars",
 		"memory_store",
+		"tmpdir",
+		"docker",
+		"docker_compose",
+		"kubectl",
+		"k3s",
 	})
 }

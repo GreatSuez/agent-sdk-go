@@ -1,14 +1,15 @@
 # Log Analyzer Agent
 
-An intelligent log analysis agent built on the PipeOps Agent SDK that analyzes application logs, identifies issues, suggests fixes, and can automatically create pull requests with the fixes.
+A multi-phase AI agent system built on the PipeOps Agent SDK that analyzes application logs, identifies issues, suggests fixes, and can automatically create pull requests with the fixes.
 
 ## Features
 
 - **🔍 Log Analysis**: Parse and analyze application logs to identify errors, warnings, and issues
 - **📊 Issue Classification**: Categorize issues by severity (critical, high, medium, low)
-- **🔧 Fix Suggestions**: Generate specific, actionable code fixes
+- **🔧 Fix Suggestions**: Generate specific, actionable code fixes using specialized agents
 - **📦 Repository Integration**: Clone repos to analyze issues with full code context
 - **🚀 PR Automation**: Automatically create pull requests with suggested fixes
+- **🤖 Multi-Agent Architecture**: Uses specialized agents for analysis, fix generation, and code application
 
 ## Quick Start
 
@@ -70,29 +71,63 @@ go run . analyze \
 
 ## How It Works
 
-### Phase 1: Log Analysis
+This system uses multiple specialized agents, each with its own role and tools:
 
-The agent reads your logs and:
-1. Redacts sensitive data (API keys, tokens, passwords)
-2. Classifies log entries (errors, warnings, info)
-3. Identifies patterns and root causes
-4. Generates a structured analysis report
+### Agent 1: Log Analysis Agent
+**Role**: Analyze logs and identify issues
+- Reads and preprocesses logs (redaction, truncation)
+- Classifies log entries (errors, warnings, info)
+- Identifies patterns and root causes
+- Generates structured analysis report
 
-### Phase 2: Code Context (with --repo)
+**Prompt Focus**: Expert log analyst identifying issues and severity
 
-If a repository URL is provided:
-1. Clones the repository (shallow clone for speed)
-2. Searches for relevant source files
-3. Correlates log errors with code locations
-4. Generates more precise fix suggestions
+### Agent 2: Fix Generator Agent (with --repo)
+**Role**: Generate code fixes with repository context
+- Uses `file_system` and `code_search` tools
+- Reads relevant source files from cloned repo
+- Correlates log errors with code locations
+- Generates specific code fix suggestions
 
-### Phase 3: PR Creation (with --create-pr)
+**Prompt Focus**: Senior engineer creating precise fixes
 
-If PR creation is enabled:
-1. Creates a new branch
-2. Applies suggested fixes to files
-3. Commits changes with descriptive message
-4. Pushes branch and creates PR via GitHub API
+### Agent 3: Fix Applier Agent (with --create-pr)
+**Role**: Apply fixes to files
+- Uses `file_system` tool with write operations
+- Applies each fix to the appropriate file
+- Ensures changes are minimal and surgical
+
+**Prompt Focus**: Code modifier applying changes precisely
+
+### Workflow Phases
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Phase 1: Analysis                        │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │
+│  │ Preprocess  │───▶│ Log Analysis│───▶│   Report    │     │
+│  │   Logs      │    │    Agent    │    │  Generation │     │
+│  └─────────────┘    └─────────────┘    └─────────────┘     │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ (if --repo provided)
+┌─────────────────────────────────────────────────────────────┐
+│                 Phase 2: Code Context                       │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │
+│  │  Git Clone  │───▶│Fix Generator│───▶│   Fixes     │     │
+│  │    Repo     │    │    Agent    │    │  Suggested  │     │
+│  └─────────────┘    └─────────────┘    └─────────────┘     │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ (if --create-pr)
+┌─────────────────────────────────────────────────────────────┐
+│                 Phase 3: PR Creation                        │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │
+│  │Fix Applier  │───▶│ Git Commit  │───▶│  GitHub PR  │     │
+│  │   Agent     │    │  & Push     │    │   Create    │     │
+│  └─────────────┘    └─────────────┘    └─────────────┘     │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## Example Output
 
@@ -311,15 +346,41 @@ The agent couldn't apply fixes, possibly because:
 
 ```
 log_analyzer/
-└── main.go          # Complete agent implementation
+└── main.go          # Multi-agent system implementation
 
-Components:
+Agents:
+├── Log Analysis Agent     # Analyzes logs, identifies issues
+│   └── Prompt: logAnalyzerPrompt
+│   └── Tools: none (analysis only)
+│
+├── Fix Generator Agent    # Generates code fixes
+│   └── Prompt: codeFixPrompt
+│   └── Tools: file_system, code_search
+│
+└── Fix Applier Agent      # Applies fixes to files
+    └── Prompt: apply instructions
+    └── Tools: file_system (write)
+
+Supporting Components:
 ├── Log Preprocessor   # Redact secrets, truncate, normalize
-├── Analysis Agent     # LLM-powered log analysis
-├── Fix Generator      # Code fix suggestions with context
-├── PR Creator         # Git operations and GitHub API
+├── Git Operations     # Clone, branch, commit, push
+├── GitHub API         # PR creation via REST API
 └── Observer           # Tracing and debugging
 ```
+
+### Why Multiple Agents?
+
+Each agent is specialized for its task:
+
+1. **Analysis Agent**: No tools needed - pure reasoning about log patterns
+2. **Fix Generator Agent**: Needs file_system/code_search to understand codebase
+3. **Fix Applier Agent**: Needs file_system write access to apply changes
+
+This separation provides:
+- **Better prompts**: Each agent has a focused system prompt
+- **Right tools**: Each agent gets only the tools it needs
+- **Clear boundaries**: Easier to debug and extend
+- **Safety**: Write operations only in the final agent
 
 ## Customization
 
