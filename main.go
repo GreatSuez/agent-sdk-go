@@ -41,9 +41,10 @@ const (
 )
 
 type cliOptions struct {
-	workflow     string
-	tools        []string
-	systemPrompt string
+	workflow       string
+	tools          []string
+	systemPrompt   string
+	promptTemplate string
 }
 
 type uiOptions struct {
@@ -233,12 +234,38 @@ func buildAgent(provider llm.Provider, store state.Store, observer observe.Sink,
 	if err != nil {
 		return nil, fmt.Errorf("resolve tools: %w", err)
 	}
-	prompt := strings.TrimSpace(opts.systemPrompt)
-	if prompt == "" {
-		prompt = strings.TrimSpace(os.Getenv("AGENT_SYSTEM_PROMPT"))
+
+	// Determine system prompt with template support
+	customPrompt := strings.TrimSpace(opts.systemPrompt)
+	if customPrompt == "" {
+		customPrompt = strings.TrimSpace(os.Getenv("AGENT_SYSTEM_PROMPT"))
 	}
-	if prompt == "" {
-		prompt = defaultSystemPrompt
+
+	templateName := strings.TrimSpace(opts.promptTemplate)
+	if templateName == "" {
+		templateName = strings.TrimSpace(os.Getenv("AGENT_PROMPT_TEMPLATE"))
+	}
+
+	// Build prompt context for interpolation
+	toolNames := make([]string, 0, len(toolset))
+	for _, tool := range toolset {
+		toolNames = append(toolNames, tool.Definition().Name)
+	}
+
+	ctx := PromptContext{
+		ToolCount: len(toolset),
+		ToolNames: toolNames,
+		Provider:  provider.Name(),
+	}
+
+	// Build final prompt using template or custom
+	prompt := BuildPrompt(customPrompt, templateName, ctx)
+
+	// Validate and warn about prompt quality
+	if warnings := ValidatePrompt(prompt); len(warnings) > 0 {
+		for _, warning := range warnings {
+			log.Printf("prompt warning: %s", warning)
+		}
 	}
 
 	agentOpts := []agentfw.Option{
@@ -609,6 +636,8 @@ func parseArgs(args []string) (cliOptions, []string) {
 			opts.tools = splitCSV(strings.TrimPrefix(arg, "--tools="))
 		case strings.HasPrefix(arg, "--system-prompt="):
 			opts.systemPrompt = strings.TrimSpace(strings.TrimPrefix(arg, "--system-prompt="))
+		case strings.HasPrefix(arg, "--prompt-template="):
+			opts.promptTemplate = strings.TrimSpace(strings.TrimPrefix(arg, "--prompt-template="))
 		default:
 			positional = append(positional, arg)
 		}
@@ -673,7 +702,26 @@ func printUsage() {
 	fmt.Println("  go run ./framework ui [--ui-addr=127.0.0.1:7070] [--ui-open=true]")
 	fmt.Println("  go run ./framework ui-api [--ui-addr=0.0.0.0:7070]")
 	fmt.Println("  go run ./framework ui-admin create-key [--role=admin]")
+	fmt.Println()
+	fmt.Println("Agent Configuration:")
+	fmt.Println("  --system-prompt=TEXT          Custom system prompt (takes precedence over template)")
+	fmt.Println("  --prompt-template=NAME        Use predefined prompt template")
+	fmt.Println("  --tools=@default              Tool bundle (comma-separated)")
+	fmt.Println("  --workflow=basic              Graph workflow name")
+	fmt.Println()
+	fmt.Println("Examples:")
+	fmt.Println("  go run ./framework run --prompt-template=analyst -- \"analyze this log\"")
+	fmt.Println("  go run ./framework run --prompt-template=engineer -- \"fix this code\"")
+	fmt.Println("  go run ./framework run --system-prompt=\"You are a helpful assistant.\" -- \"help me\"")
+	fmt.Println()
 	fmt.Printf("  available workflows: %s\n", strings.Join(workflow.Names(), ", "))
 	fmt.Printf("  available tools: %s\n", strings.Join(tools.ToolNames(), ", "))
 	fmt.Printf("  available bundles: %s\n", strings.Join(tools.BundleNames(), ", "))
+	fmt.Printf("  available prompt templates: %s\n", strings.Join(AvailablePromptNames(), ", "))
+	fmt.Println()
+	fmt.Println("Environment Variables:")
+	fmt.Println("  AGENT_SYSTEM_PROMPT          Custom system prompt")
+	fmt.Println("  AGENT_PROMPT_TEMPLATE        Prompt template name")
+	fmt.Println("  AGENT_TOOLS                  Tool selection (comma-separated)")
+	fmt.Println("  AGENT_WORKFLOW               Graph workflow name")
 }
