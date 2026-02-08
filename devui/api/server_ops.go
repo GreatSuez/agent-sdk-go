@@ -336,7 +336,8 @@ func (s *Server) handleToolIntelligence(w http.ResponseWriter, r *http.Request, 
 		items = append(items, *item)
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Calls > items[j].Calls })
-	hotspots := append([]row(nil), items...)
+	hotspots := make([]row, len(items))
+	copy(hotspots, items)
 	sort.Slice(hotspots, func(i, j int) bool {
 		if hotspots[i].FailureRate == hotspots[j].FailureRate {
 			return hotspots[i].Failures > hotspots[j].Failures

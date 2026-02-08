@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	appsecops "github.com/PipeOpsHQ/agent-sdk-go/app/secops"
+	appsecops "github.com/PipeOpsHQ/agent-sdk-go/framework/app/secops"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/graph"
 )
 

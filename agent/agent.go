@@ -800,3 +800,44 @@ func (a *Agent) emitRuntimeEvent(ctx context.Context, event types.Event) {
 	}
 	_ = a.observer.Emit(ctx, observe.FromRuntimeEvent(event))
 }
+
+// RegisterTool adds a tool to the agent at runtime.
+func (a *Agent) RegisterTool(tool tools.Tool) {
+	if a == nil || tool == nil {
+		return
+	}
+	def := tool.Definition()
+	if def.Name == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.tools == nil {
+		a.tools = make(map[string]tools.Tool)
+	}
+	a.tools[def.Name] = tool
+}
+
+// UnregisterTool removes a tool from the agent.
+func (a *Agent) UnregisterTool(name string) {
+	if a == nil || name == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.tools, name)
+}
+
+// ListTools returns the names of all registered tools.
+func (a *Agent) ListTools() []string {
+	if a == nil {
+		return nil
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	names := make([]string, 0, len(a.tools))
+	for name := range a.tools {
+		names = append(names, name)
+	}
+	return names
+}
