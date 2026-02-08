@@ -11,6 +11,7 @@ type RuntimeService interface {
 	QueueStats(ctx context.Context) (queue.Stats, error)
 	ListWorkers(ctx context.Context, limit int) ([]distributed.WorkerHeartbeat, error)
 	ListRunAttempts(ctx context.Context, runID string, limit int) ([]distributed.AttemptRecord, error)
+	ListQueueEvents(ctx context.Context, runID string, limit int) ([]distributed.QueueEvent, error)
 	CancelRun(ctx context.Context, runID string) error
 	RequeueRun(ctx context.Context, runID string) error
 	ListDLQ(ctx context.Context, limit int) ([]queue.Delivery, error)

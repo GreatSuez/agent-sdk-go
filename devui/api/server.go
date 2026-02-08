@@ -20,6 +20,7 @@ import (
 	observestore "github.com/PipeOpsHQ/agent-sdk-go/framework/observe/store"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/state"
 	fwtools "github.com/PipeOpsHQ/agent-sdk-go/framework/tools"
+	"github.com/PipeOpsHQ/agent-sdk-go/framework/workflow"
 )
 
 //go:embed static/*
@@ -33,16 +34,19 @@ type Config struct {
 	AuthStore        auth.Store
 	AuditStore       AuditStore
 	Runtime          RuntimeService
+	Playground       PlaygroundRunner
 	RequireAPIKey    bool
 	AllowLocalNoAuth bool
 }
 
 type Server struct {
-	cfg    Config
-	stream *eventStream
-	mux    *http.ServeMux
-	http   *http.Server
-	once   sync.Once
+	cfg             Config
+	stream          *eventStream
+	mux             *http.ServeMux
+	http            *http.Server
+	once            sync.Once
+	workerOverrides map[string]string
+	overridesMu     sync.RWMutex
 }
 
 type principal struct {
@@ -54,7 +58,12 @@ func NewServer(cfg Config) *Server {
 	if strings.TrimSpace(cfg.Addr) == "" {
 		cfg.Addr = "127.0.0.1:7070"
 	}
-	s := &Server{cfg: cfg, stream: newEventStream(), mux: http.NewServeMux()}
+	s := &Server{
+		cfg:             cfg,
+		stream:          newEventStream(),
+		mux:             http.NewServeMux(),
+		workerOverrides: map[string]string{},
+	}
 	s.registerRoutes()
 	s.http = &http.Server{Addr: cfg.Addr, Handler: s.mux}
 	return s
@@ -114,16 +123,23 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/events", s.require(auth.RoleOperator, s.handleIngestEvent))
 
 	s.mux.HandleFunc("/api/v1/runtime/workers", s.require(auth.RoleViewer, s.handleRuntimeWorkers))
+	s.mux.HandleFunc("/api/v1/runtime/workers/", s.require(auth.RoleViewer, s.handleRuntimeWorkerActions))
 	s.mux.HandleFunc("/api/v1/runtime/queues", s.require(auth.RoleViewer, s.handleRuntimeQueues))
+	s.mux.HandleFunc("/api/v1/runtime/queue-events", s.require(auth.RoleViewer, s.handleRuntimeQueueEvents))
 	s.mux.HandleFunc("/api/v1/runtime/dlq", s.require(auth.RoleViewer, s.handleRuntimeDLQ))
+	s.mux.HandleFunc("/api/v1/runtime/dlq/requeue", s.require(auth.RoleOperator, s.handleRuntimeDLQRequeue))
 	s.mux.HandleFunc("/api/v1/runtime/details", s.require(auth.RoleViewer, s.handleRuntimeDetails))
 	s.mux.HandleFunc("/api/v1/runtime/runs/", s.require(auth.RoleViewer, s.handleRuntimeRunActions))
+	s.mux.HandleFunc("/api/v1/playground/run", s.require(auth.RoleViewer, s.handlePlaygroundRun))
+	s.mux.HandleFunc("/api/v1/commands/execute", s.require(auth.RoleViewer, s.handleCommandExecute))
 
 	s.mux.HandleFunc("/api/v1/tools/registry", s.require(auth.RoleViewer, s.handleToolRegistry))
+	s.mux.HandleFunc("/api/v1/tools/intelligence", s.require(auth.RoleViewer, s.handleToolIntelligence))
 	s.mux.HandleFunc("/api/v1/tools/templates", s.require(auth.RoleViewer, s.handleToolTemplates))
 	s.mux.HandleFunc("/api/v1/tools/instances", s.require(auth.RoleViewer, s.handleToolInstances))
 	s.mux.HandleFunc("/api/v1/tools/instances/", s.require(auth.RoleViewer, s.handleToolInstanceByID))
 	s.mux.HandleFunc("/api/v1/tools/bundles", s.require(auth.RoleViewer, s.handleToolBundles))
+	s.mux.HandleFunc("/api/v1/workflows/registry", s.require(auth.RoleViewer, s.handleWorkflowRegistry))
 	s.mux.HandleFunc("/api/v1/workflows", s.require(auth.RoleViewer, s.handleWorkflows))
 	s.mux.HandleFunc("/api/v1/workflows/", s.require(auth.RoleViewer, s.handleWorkflowBindingByID))
 	s.mux.HandleFunc("/api/v1/integrations/providers", s.require(auth.RoleViewer, s.handleIntegrationProviders))
@@ -131,6 +147,7 @@ func (s *Server) registerRoutes() {
 
 	s.mux.HandleFunc("/api/v1/auth/keys", s.require(auth.RoleAdmin, s.handleAuthKeys))
 	s.mux.HandleFunc("/api/v1/auth/keys/", s.require(auth.RoleAdmin, s.handleAuthKeyByID))
+	s.mux.HandleFunc("/api/v1/audit/logs", s.require(auth.RoleViewer, s.handleAuditLogs))
 
 	staticRoot, _ := fs.Sub(staticFiles, "static")
 	files := http.FileServer(http.FS(staticRoot))
@@ -234,7 +251,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request, _ principal)
 	writeJSON(w, http.StatusOK, runs)
 }
 
-func (s *Server) handleRunSubresources(w http.ResponseWriter, r *http.Request, _ principal) {
+func (s *Server) handleRunSubresources(w http.ResponseWriter, r *http.Request, p principal) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/v1/runs/")
 	parts := splitPath(path)
 	if len(parts) == 0 {
@@ -298,6 +315,45 @@ func (s *Server) handleRunSubresources(w http.ResponseWriter, r *http.Request, _
 			return
 		}
 		writeJSON(w, http.StatusOK, rows)
+	case "interventions":
+		if s.cfg.StateStore == nil {
+			writeError(w, http.StatusNotImplemented, fmt.Errorf("state store not configured"))
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			run, err := s.cfg.StateStore.LoadRun(r.Context(), runID)
+			if err != nil {
+				status := http.StatusInternalServerError
+				if errors.Is(err, state.ErrNotFound) {
+					status = http.StatusNotFound
+				}
+				writeError(w, status, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, s.listRunInterventions(run))
+		case http.MethodPost:
+			if p.Role.Rank() < auth.RoleOperator.Rank() {
+				writeError(w, http.StatusForbidden, fmt.Errorf("insufficient role: requires %s", auth.RoleOperator))
+				return
+			}
+			var req interventionRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			entry, err := s.applyIntervention(r.Context(), p, runID, req)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok":    true,
+				"entry": entry,
+			})
+		default:
+			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		}
 	default:
 		writeError(w, http.StatusNotFound, fmt.Errorf("unsupported run endpoint"))
 	}
@@ -362,6 +418,25 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request, _ principal) 
 
 	id, ch := s.stream.subscribe(128)
 	defer s.stream.unsubscribe(id)
+	runIDFilter := strings.TrimSpace(r.URL.Query().Get("run_id"))
+	kindFilter := strings.TrimSpace(r.URL.Query().Get("kind"))
+	statusFilter := strings.TrimSpace(r.URL.Query().Get("status"))
+
+	if s.cfg.TraceStore != nil && runIDFilter != "" {
+		backlog, err := s.cfg.TraceStore.ListEventsByRun(r.Context(), runIDFilter, observestore.ListQuery{Limit: 50, Offset: 0})
+		if err == nil {
+			for _, event := range backlog {
+				if !eventMatchesFilter(event, runIDFilter, kindFilter, statusFilter) {
+					continue
+				}
+				payload, _ := json.Marshal(event)
+				_, _ = w.Write([]byte("data: "))
+				_, _ = w.Write(payload)
+				_, _ = w.Write([]byte("\n\n"))
+			}
+			flusher.Flush()
+		}
+	}
 
 	ping := time.NewTicker(15 * time.Second)
 	defer ping.Stop()
@@ -374,6 +449,9 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request, _ principal) 
 			_, _ = w.Write([]byte(": keepalive\n\n"))
 			flusher.Flush()
 		case event := <-ch:
+			if !eventMatchesFilter(event, runIDFilter, kindFilter, statusFilter) {
+				continue
+			}
 			payload, _ := json.Marshal(event)
 			_, _ = w.Write([]byte("data: "))
 			_, _ = w.Write(payload)
@@ -421,6 +499,7 @@ func (s *Server) handleRuntimeWorkers(w http.ResponseWriter, r *http.Request, _ 
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	workers = s.withWorkerOverrides(workers)
 	writeJSON(w, http.StatusOK, workers)
 }
 
@@ -489,6 +568,7 @@ func (s *Server) handleRuntimeDetails(w http.ResponseWriter, r *http.Request, _ 
 	}
 
 	if workers, err := s.cfg.Runtime.ListWorkers(r.Context(), 100); err == nil {
+		workers = s.withWorkerOverrides(workers)
 		response["workers"] = workers
 		response["workerCount"] = len(workers)
 	} else {
@@ -571,6 +651,34 @@ func (s *Server) handleRuntimeRunActions(w http.ResponseWriter, r *http.Request,
 	}
 }
 
+func (s *Server) handlePlaygroundRun(w http.ResponseWriter, r *http.Request, _ principal) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+	if s.cfg.Playground == nil {
+		writeError(w, http.StatusNotImplemented, fmt.Errorf("playground runner not configured"))
+		return
+	}
+	var req PlaygroundRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	resp, err := s.cfg.Playground.Run(r.Context(), req)
+	if err != nil {
+		writeJSON(w, http.StatusOK, PlaygroundResponse{
+			Status: "failed",
+			Error:  err.Error(),
+		})
+		return
+	}
+	if strings.TrimSpace(resp.Status) == "" {
+		resp.Status = "completed"
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
 func (s *Server) handleToolTemplates(w http.ResponseWriter, r *http.Request, p principal) {
 	if s.cfg.CatalogStore == nil {
 		writeError(w, http.StatusNotImplemented, fmt.Errorf("catalog store not configured"))
@@ -614,9 +722,9 @@ func (s *Server) handleToolRegistry(w http.ResponseWriter, r *http.Request, _ pr
 	tools := fwtools.ToolCatalog()
 	bundles := fwtools.BundleCatalog()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"tools":      tools,
-		"bundles":    bundles,
-		"toolCount":  len(tools),
+		"tools":       tools,
+		"bundles":     bundles,
+		"toolCount":   len(tools),
 		"bundleCount": len(bundles),
 	})
 }
@@ -753,19 +861,50 @@ func (s *Server) handleWorkflows(w http.ResponseWriter, r *http.Request, _ princ
 	writeJSON(w, http.StatusOK, items)
 }
 
+func (s *Server) handleWorkflowRegistry(w http.ResponseWriter, r *http.Request, _ principal) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+	names := workflow.Names()
+	items := make([]map[string]any, 0, len(names))
+	for _, name := range names {
+		items = append(items, map[string]any{
+			"name": name,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"workflows": items,
+		"count":     len(items),
+	})
+}
+
 func (s *Server) handleWorkflowBindingByID(w http.ResponseWriter, r *http.Request, p principal) {
 	if s.cfg.CatalogStore == nil {
 		writeError(w, http.StatusNotImplemented, fmt.Errorf("catalog store not configured"))
 		return
 	}
 	parts := splitPath(strings.TrimPrefix(r.URL.Path, "/api/v1/workflows/"))
-	if len(parts) != 2 || parts[1] != "tool-bindings" {
+	if len(parts) != 2 {
 		writeError(w, http.StatusNotFound, fmt.Errorf("unsupported workflow endpoint"))
 		return
 	}
 	workflowName := parts[0]
 	if workflowName == "" {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("workflow is required"))
+		return
+	}
+	if parts[1] == "topology" {
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+			return
+		}
+		topology := s.workflowTopology(r.Context(), workflowName)
+		writeJSON(w, http.StatusOK, topology)
+		return
+	}
+	if parts[1] != "tool-bindings" {
+		writeError(w, http.StatusNotFound, fmt.Errorf("unsupported workflow endpoint"))
 		return
 	}
 	switch r.Method {

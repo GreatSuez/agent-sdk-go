@@ -1,0 +1,40 @@
+version: 2
+
+updates:
+  # Go modules
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "go"
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "google.golang.org/*"
+          - "cloud.google.com/*"
+      google-cloud:
+        patterns:
+          - "google.golang.org/*"
+          - "cloud.google.com/*"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/framework/.github/workflows"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "github-actions"
+

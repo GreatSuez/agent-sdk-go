@@ -3,11 +3,11 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AI Agent Console</title>
+    <title>PipeOps Agentic Console</title>
     <link rel="stylesheet" href="/styles.css" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   </head>
   <body>
     <div class="app-container">
@@ -26,33 +26,31 @@
                 </linearGradient>
               </defs>
             </svg>
-            <span class="logo-text">Agent Console</span>
+            <span class="logo-text">PipeOps</span>
           </div>
         </div>
 
         <nav class="sidebar-nav">
-          <button class="nav-item active" data-tab="dashboard">
+          <button class="nav-item active" data-tab="live" title="Live">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="3" width="7" height="7" rx="1"/>
-              <rect x="14" y="3" width="7" height="7" rx="1"/>
-              <rect x="3" y="14" width="7" height="7" rx="1"/>
-              <rect x="14" y="14" width="7" height="7" rx="1"/>
+              <circle cx="12" cy="12" r="8"/>
+              <circle cx="12" cy="12" r="3"/>
             </svg>
-            <span>Dashboard</span>
+            <span>Live</span>
           </button>
-          <button class="nav-item" data-tab="runs">
+          <button class="nav-item" data-tab="runs" title="Runs">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M5 12h14M12 5l7 7-7 7"/>
             </svg>
             <span>Runs</span>
           </button>
-          <button class="nav-item" data-tab="playground">
+          <button class="nav-item" data-tab="playground" title="Playground">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polygon points="5,3 19,12 5,21"/>
             </svg>
             <span>Playground</span>
           </button>
-          <button class="nav-item" data-tab="workflows">
+          <button class="nav-item" data-tab="workflows" title="Graphs">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="5" cy="12" r="2"/>
               <circle cx="12" cy="6" r="2"/>
@@ -60,25 +58,32 @@
               <circle cx="19" cy="12" r="2"/>
               <path d="M7 12h3M14 6h2.5a1 1 0 011 1v4M14 18h2.5a1 1 0 001-1v-4"/>
             </svg>
-            <span>Workflows</span>
+            <span>Graphs</span>
           </button>
-          <button class="nav-item" data-tab="tools">
+          <button class="nav-item" data-tab="tools" title="Tools">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/>
             </svg>
             <span>Tools</span>
           </button>
-          <button class="nav-item" data-tab="runtime">
+          <button class="nav-item" data-tab="runtime" title="Runtime">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="2" y="3" width="20" height="14" rx="2"/>
               <path d="M8 21h8M12 17v4"/>
             </svg>
             <span>Runtime</span>
           </button>
+          <button class="nav-item" data-tab="audit" title="Audit">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 11l3 3L22 4"/>
+              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+            </svg>
+            <span>Audit</span>
+          </button>
         </nav>
 
         <div class="sidebar-footer">
-          <button class="nav-item" data-tab="settings">
+          <button class="nav-item" data-tab="settings" title="Settings">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="3"/>
               <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
@@ -101,11 +106,24 @@
 
       <!-- Main Content -->
       <main class="main-content">
-        <!-- Dashboard Tab -->
-        <section id="tab-dashboard" class="tab active">
+        <div class="command-bar">
+          <div class="command-prefix">⌘K</div>
+          <input id="commandInput" class="command-input" placeholder='Ask control plane: "resume failed runs from last checkpoint"' />
+          <button id="commandRun" class="command-run">Execute</button>
+        </div>
+        <div class="command-result" id="commandResult"></div>
+
+        <!-- Live Tab -->
+        <section id="tab-live" class="tab active">
           <div class="page-header">
-            <h1>Dashboard</h1>
-            <p class="page-subtitle">Real-time agent performance and activity</p>
+            <h1>Live Agent View</h1>
+            <p class="page-subtitle">Observe cognition, execution, and intervention in real time.</p>
+          </div>
+
+          <div class="live-runs-strip" id="liveRunsStrip">
+            <div class="empty-state">
+              <p>No active entities</p>
+            </div>
           </div>
 
           <div class="metrics-grid">
@@ -177,7 +195,7 @@
 
             <div class="card">
               <div class="card-header">
-                <h3>System Status</h3>
+                <h3>Control Plane State</h3>
               </div>
               <div class="status-grid">
                 <div class="status-item">
@@ -249,10 +267,41 @@
               </div>
               <div class="run-tab-content" id="runTabContent">
                 <div id="run-overview" class="run-panel active">
-                  <pre id="runDetail" class="code-block"></pre>
+                  <div class="run-overview-grid">
+                    <pre id="runDetail" class="code-block"></pre>
+                    <div class="run-ops-column">
+                      <div class="card">
+                        <div class="card-header">
+                          <h3>Execution State</h3>
+                        </div>
+                        <div class="run-exec-state" id="runExecutionState">
+                          <div class="empty-state"><p>Select a run to view execution state.</p></div>
+                        </div>
+                      </div>
+                      <div class="card">
+                        <div class="card-header">
+                          <h3>Interventions</h3>
+                        </div>
+                        <div class="run-interventions">
+                          <div class="intervention-actions">
+                            <button class="btn btn-secondary btn-sm" data-intervention="cancel">Cancel</button>
+                            <button class="btn btn-secondary btn-sm" data-intervention="force_retry">Force Retry</button>
+                            <button class="btn btn-secondary btn-sm" data-intervention="skip_node">Skip Node</button>
+                            <button class="btn btn-secondary btn-sm" data-intervention="override_router">Override Route</button>
+                            <button class="btn btn-secondary btn-sm" data-intervention="inject_tool_result">Inject Tool Result</button>
+                          </div>
+                          <div class="intervention-log" id="interventionLog">
+                            <div class="empty-state"><p>No interventions recorded.</p></div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <div id="run-timeline" class="run-panel">
-                  <div class="timeline" id="runTimeline"></div>
+                  <div class="cognitive-metrics" id="runCognitiveMetrics"></div>
+                  <div class="attempt-lane" id="runAttemptLane"></div>
+                  <div class="timeline cognitive" id="runTimeline"></div>
                 </div>
                 <div id="run-messages" class="run-panel">
                   <div class="messages-list" id="runMessages"></div>
@@ -337,6 +386,23 @@
               <p>Loading workflows...</p>
             </div>
           </div>
+          <div class="card topology-card">
+            <div class="card-header">
+              <h3>Graph Topology</h3>
+            </div>
+            <div class="topology-controls">
+              <label>Workflow
+                <select id="graphWorkflowSelect" class="select"></select>
+              </label>
+              <label>Run Overlay
+                <select id="graphRunSelect" class="select"></select>
+              </label>
+              <button class="btn btn-secondary btn-sm" id="refreshTopology">Refresh Topology</button>
+            </div>
+            <div class="topology-canvas-wrap">
+              <svg id="workflowGraphSvg" viewBox="0 0 1200 420"></svg>
+            </div>
+          </div>
         </section>
 
         <!-- Tools Tab -->
@@ -351,6 +417,29 @@
                 </svg>
                 Refresh
               </button>
+            </div>
+          </div>
+
+          <div class="tool-intel-grid">
+            <div class="card">
+              <div class="card-header">
+                <h3>Capability Heatmap</h3>
+              </div>
+              <div class="tool-heatmap" id="toolHeatmap">
+                <div class="empty-state">
+                  <p>Collecting tool intelligence...</p>
+                </div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header">
+                <h3>Failure Hotspots</h3>
+              </div>
+              <div class="tool-hotspots" id="toolHotspots">
+                <div class="empty-state">
+                  <p>No hotspots yet</p>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -418,12 +507,34 @@
                   <span class="stat-label">DLQ Length</span>
                   <span class="stat-value" id="queue-dlq">-</span>
                 </div>
+                <div class="stat-row">
+                  <span class="stat-label">Runtime Status</span>
+                  <span class="stat-value" id="runtime-status">-</span>
+                </div>
+                <div class="stat-row">
+                  <span class="stat-label">Runtime Errors</span>
+                  <span class="stat-value" id="runtime-errors">-</span>
+                </div>
+              </div>
+              <div class="queue-lag-panel">
+                <div class="queue-wave">
+                  <div class="queue-wave-fill" id="queueWaveFill"></div>
+                </div>
+                <div class="queue-lag-meta">
+                  <span id="queueLagLabel">Lag nominal</span>
+                  <span id="queueHealthLabel">Healthy</span>
+                </div>
               </div>
             </div>
 
             <div class="card">
               <div class="card-header">
                 <h3>Workers</h3>
+              </div>
+              <div class="worker-fleet" id="workerFleet">
+                <div class="empty-state">
+                  <p>No worker heartbeat</p>
+                </div>
               </div>
               <div class="workers-list" id="workersList">
                 <div class="empty-state">
@@ -435,12 +546,40 @@
 
           <div class="card">
             <div class="card-header">
+              <h3>Queue Events</h3>
+              <button class="btn btn-secondary btn-sm" id="refreshQueueEvents">Refresh</button>
+            </div>
+            <div class="queue-events" id="queueEventsList">
+              <div class="empty-state"><p>No queue events available.</p></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
               <h3>Dead Letter Queue</h3>
             </div>
             <div class="dlq-list" id="dlqList">
               <div class="empty-state">
                 <p>No failed tasks</p>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Audit Tab -->
+        <section id="tab-audit" class="tab">
+          <div class="page-header">
+            <h1>Audit Trail</h1>
+            <div class="header-actions">
+              <button class="btn btn-secondary" id="refreshAudit">Refresh</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <h3>Mutation Log</h3>
+            </div>
+            <div class="audit-log" id="auditLogList">
+              <div class="empty-state"><p>Loading audit events...</p></div>
             </div>
           </div>
         </section>

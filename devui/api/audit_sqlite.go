@@ -68,6 +68,52 @@ func (s *sqliteAuditStore) Record(ctx context.Context, entry AuditLog) error {
 	return nil
 }
 
+func (s *sqliteAuditStore) List(ctx context.Context, limit int, offset int) ([]AuditLogEntry, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT id, actor_key_id, action, resource, payload, created_at
+FROM audit_logs
+ORDER BY created_at DESC
+LIMIT ? OFFSET ?;`,
+		limit,
+		offset,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list audit logs: %w", err)
+	}
+	defer rows.Close()
+	out := make([]AuditLogEntry, 0, limit)
+	for rows.Next() {
+		var (
+			entry    AuditLogEntry
+			created  string
+			actorKey sql.NullString
+		)
+		if err := rows.Scan(&entry.ID, &actorKey, &entry.Action, &entry.Resource, &entry.Payload, &created); err != nil {
+			return nil, fmt.Errorf("scan audit log: %w", err)
+		}
+		entry.ActorKeyID = actorKey.String
+		t, parseErr := time.Parse(time.RFC3339Nano, created)
+		if parseErr == nil {
+			entry.CreatedAt = t
+		}
+		out = append(out, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate audit logs: %w", err)
+	}
+	return out, nil
+}
+
 func (s *sqliteAuditStore) Close() error {
 	if s == nil || s.db == nil {
 		return nil

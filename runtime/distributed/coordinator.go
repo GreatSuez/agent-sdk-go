@@ -37,6 +37,7 @@ type Coordinator interface {
 	QueueStats(ctx context.Context) (queue.Stats, error)
 	ListWorkers(ctx context.Context, limit int) ([]WorkerHeartbeat, error)
 	ListRunAttempts(ctx context.Context, runID string, limit int) ([]AttemptRecord, error)
+	ListQueueEvents(ctx context.Context, runID string, limit int) ([]QueueEvent, error)
 	ListDLQ(ctx context.Context, limit int) ([]queue.Delivery, error)
 }
 
@@ -327,6 +328,10 @@ func (c *coordinator) ListWorkers(ctx context.Context, limit int) ([]WorkerHeart
 
 func (c *coordinator) ListRunAttempts(ctx context.Context, runID string, limit int) ([]AttemptRecord, error) {
 	return c.attempts.ListAttempts(ctx, runID, limit)
+}
+
+func (c *coordinator) ListQueueEvents(ctx context.Context, runID string, limit int) ([]QueueEvent, error) {
+	return c.attempts.ListQueueEvents(ctx, runID, limit)
 }
 
 func (c *coordinator) ListDLQ(ctx context.Context, limit int) ([]queue.Delivery, error) {

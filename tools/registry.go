@@ -10,9 +10,9 @@ import (
 type Factory func() Tool
 
 type Bundle struct {
-	Name        string
-	Description string
-	Tools       []string
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	Tools       []string `json:"tools"`
 }
 
 type ToolInfo struct {

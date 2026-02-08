@@ -1,0 +1,125 @@
+name-template: 'v$RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+
+categories:
+  - title: '🚀 Features'
+    labels:
+      - 'feature'
+      - 'feat'
+      - 'enhancement'
+  - title: '🐛 Bug Fixes'
+    labels:
+      - 'fix'
+      - 'bugfix'
+      - 'bug'
+  - title: '🔧 Maintenance'
+    labels:
+      - 'chore'
+      - 'maintenance'
+  - title: '📚 Documentation'
+    labels:
+      - 'documentation'
+      - 'docs'
+  - title: '⬆️ Dependencies'
+    labels:
+      - 'dependencies'
+    collapse-after: 5
+  - title: '🔒 Security'
+    labels:
+      - 'security'
+  - title: '🧪 Testing'
+    labels:
+      - 'test'
+      - 'testing'
+
+change-template: '- $TITLE @$AUTHOR (#$NUMBER)'
+change-title-escapes: '\<*_&'
+
+version-resolver:
+  major:
+    labels:
+      - 'major'
+      - 'breaking'
+  minor:
+    labels:
+      - 'minor'
+      - 'feature'
+      - 'feat'
+      - 'enhancement'
+  patch:
+    labels:
+      - 'patch'
+      - 'fix'
+      - 'bugfix'
+      - 'bug'
+      - 'chore'
+      - 'maintenance'
+  default: patch
+
+autolabeler:
+  - label: 'feature'
+    title:
+      - '/^feat(\(.+\))?:/i'
+      - '/^feature(\(.+\))?:/i'
+  - label: 'fix'
+    title:
+      - '/^fix(\(.+\))?:/i'
+      - '/^bugfix(\(.+\))?:/i'
+  - label: 'chore'
+    title:
+      - '/^chore(\(.+\))?:/i'
+      - '/^refactor(\(.+\))?:/i'
+  - label: 'documentation'
+    title:
+      - '/^docs(\(.+\))?:/i'
+    files:
+      - '*.md'
+      - 'docs/**/*'
+  - label: 'dependencies'
+    title:
+      - '/^deps(\(.+\))?:/i'
+      - '/^dep(\(.+\))?:/i'
+    files:
+      - 'go.mod'
+      - 'go.sum'
+  - label: 'security'
+    title:
+      - '/^security(\(.+\))?:/i'
+      - '/^sec(\(.+\))?:/i'
+  - label: 'test'
+    title:
+      - '/^test(\(.+\))?:/i'
+    files:
+      - '**/*_test.go'
+  - label: 'github-actions'
+    files:
+      - '.github/**/*'
+      - 'framework/.github/**/*'
+
+template: |
+  ## What's Changed
+
+  $CHANGES
+
+  ## Installation
+
+  ```bash
+  go get github.com/PipeOpsHQ/agent-sdk-go@v$RESOLVED_VERSION
+  ```
+
+  ## Quick Start
+
+  ```go
+  import (
+      "github.com/PipeOpsHQ/agent-sdk-go/framework/agent"
+      "github.com/PipeOpsHQ/agent-sdk-go/framework/tools"
+      "github.com/PipeOpsHQ/agent-sdk-go/framework/providers/factory"
+  )
+  ```
+
+  **Full Changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
+
+  ## Contributors
+
+  $CONTRIBUTORS
+
