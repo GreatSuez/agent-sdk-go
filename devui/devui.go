@@ -56,6 +56,7 @@ import (
 	catalogsqlite "github.com/PipeOpsHQ/agent-sdk-go/framework/devui/catalog/sqlite"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/flow"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/graph"
+	"github.com/PipeOpsHQ/agent-sdk-go/framework/guardrail"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/observe"
 	observesqlite "github.com/PipeOpsHQ/agent-sdk-go/framework/observe/store/sqlite"
 	providerfactory "github.com/PipeOpsHQ/agent-sdk-go/framework/providers/factory"
@@ -409,6 +410,28 @@ func (r *playgroundRunner) Run(ctx context.Context, req devuiapi.PlaygroundReque
 	agentOpts := []agentfw.Option{
 		agentfw.WithSystemPrompt(systemPrompt),
 		agentfw.WithMaxIterations(25),
+	}
+
+	// Wire guardrails if requested
+	if len(req.Guardrails) > 0 {
+		pipeline := guardrail.NewPipeline()
+		for _, name := range req.Guardrails {
+			switch name {
+			case "max_length":
+				pipeline.Add(&guardrail.MaxLength{Limit: 10000})
+			case "prompt_injection":
+				pipeline.AddInput(&guardrail.PromptInjection{})
+			case "content_filter":
+				pipeline.Add(&guardrail.ContentFilter{})
+			case "pii_filter":
+				pipeline.Add(&guardrail.PIIFilter{})
+			case "topic_filter":
+				pipeline.Add(&guardrail.TopicFilter{})
+			case "secret_guard":
+				pipeline.Add(&guardrail.SecretGuard{})
+			}
+		}
+		agentOpts = append(agentOpts, agentfw.WithMiddleware(guardrail.NewAgentMiddleware(pipeline)))
 	}
 
 	// Session continuity — reuse session ID and load previous conversation.

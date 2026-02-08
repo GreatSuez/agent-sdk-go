@@ -410,6 +410,17 @@ func (a *Agent) RunDetailed(ctx context.Context, input string) (types.RunResult,
 		}
 
 		if len(modelMsg.ToolCalls) == 0 {
+			// Validate response against schema if set
+			if len(a.responseSchema) > 0 && modelMsg.Content != "" {
+				if !json.Valid([]byte(modelMsg.Content)) {
+					log.Printf("⚠️  Response is not valid JSON, retrying with schema hint...")
+					messages = append(messages, types.Message{
+						Role:    types.RoleUser,
+						Content: "Your response was not valid JSON. Please respond with ONLY a valid JSON object matching the requested schema.",
+					})
+					continue
+				}
+			}
 
 			var finalUsage *types.Usage
 			if hasUsage {

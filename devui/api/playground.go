@@ -10,6 +10,7 @@ type PlaygroundRequest struct {
 	WorkflowFile string   `json:"workflowFile,omitempty"`
 	Tools        []string `json:"tools,omitempty"`
 	Skills       []string `json:"skills,omitempty"`
+	Guardrails   []string `json:"guardrails,omitempty"`
 	SystemPrompt string   `json:"systemPrompt,omitempty"`
 }
 

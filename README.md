@@ -259,4 +259,201 @@ See `framework/examples/README.md` for detailed documentation.
 - Distributed runtime (Redis Streams): implemented
 - DevUI backend + runtime ops endpoints: implemented
 - Integration catalog metadata + credential refs: implemented
+- Skills (Agent Skills open standard): implemented
+- Guardrails (input/output validation): implemented
+- Structured Output (JSON schema enforcement): implemented
+- RAG (retrieval-augmented generation): implemented
+- OpenTelemetry tracing: implemented
 - SDK docs/examples: in progress and actively expanding
+
+---
+
+## Skills
+
+Skills follow the [Agent Skills open standard](https://github.com/agent-skills) — reusable bundles of instructions + tools that augment an agent's capabilities.
+
+### Loading Skills
+
+Skills can be loaded from local directories or installed from GitHub:
+
+```go
+import "github.com/PipeOpsHQ/agent-sdk-go/framework/skill"
+
+// Load all skills from a directory
+skill.LoadDir("./skills")
+
+// Install from GitHub at runtime (via DevUI)
+// POST /api/v1/skills { "repo": "owner/repo" }
+```
+
+### Skill Format (SKILL.md)
+
+Each skill is a Markdown file named `SKILL.md`:
+
+```markdown
+---
+name: code-review
+description: Reviews code for bugs, security issues, and best practices
+license: MIT
+allowed_tools:
+  - file_system
+  - code_search
+  - git_repo
+metadata:
+  author: your-org
+  version: 1.0.0
+---
+
+## Instructions
+
+You are an expert code reviewer. When reviewing code:
+1. Check for security vulnerabilities
+2. Look for performance issues
+3. Verify error handling
+4. Suggest improvements
+```
+
+### Using Skills
+
+Skills can be attached to flows or selected in the playground:
+
+```go
+import "github.com/PipeOpsHQ/agent-sdk-go/framework/flow"
+
+flow.MustRegister(&flow.Definition{
+    Name:   "reviewer",
+    Skills: []string{"code-review"},
+    Tools:  []string{"file_system", "git_repo"},
+})
+```
+
+---
+
+## Guardrails
+
+Guardrails validate input/output before and after LLM calls to enforce safety, compliance, and quality.
+
+### Built-in Guardrails
+
+| Guardrail | Direction | Action | Description |
+|-----------|-----------|--------|-------------|
+| `max_length` | both | block | Blocks content exceeding character limit |
+| `prompt_injection` | input | block | Detects prompt injection attacks |
+| `content_filter` | both | block | Filters harmful content |
+| `pii_filter` | both | redact | Redacts PII (SSN, CC, email, phone) |
+| `topic_filter` | both | block | Restricts to allowed topics |
+| `secret_guard` | both | redact | Redacts API keys and secrets |
+
+### Usage
+
+```go
+import (
+    "github.com/PipeOpsHQ/agent-sdk-go/framework/agent"
+    "github.com/PipeOpsHQ/agent-sdk-go/framework/guardrail"
+)
+
+pipeline := guardrail.NewPipeline().
+    AddInput(&guardrail.PromptInjection{}).
+    Add(&guardrail.PIIFilter{}).
+    Add(&guardrail.SecretGuard{})
+
+a, _ := agent.New(provider,
+    agent.WithMiddleware(guardrail.NewAgentMiddleware(pipeline)),
+)
+```
+
+Guardrails are also selectable in the DevUI playground via `GET /api/v1/guardrails`.
+
+---
+
+## Structured Output
+
+Force the LLM to respond with JSON matching a schema:
+
+```go
+schema := map[string]any{
+    "name": "analysis",
+    "schema": map[string]any{
+        "type": "object",
+        "properties": map[string]any{
+            "sentiment": map[string]any{"type": "string", "enum": []string{"positive", "negative", "neutral"}},
+            "confidence": map[string]any{"type": "number"},
+            "summary":    map[string]any{"type": "string"},
+        },
+        "required": []string{"sentiment", "confidence", "summary"},
+    },
+}
+
+a, _ := agent.New(provider, agent.WithResponseSchema(schema))
+result, _ := a.Run(ctx, "Analyze: 'Great product, love it!'")
+// result.Output is valid JSON: {"sentiment":"positive","confidence":0.95,"summary":"..."}
+```
+
+- **OpenAI**: Uses native `response_format.json_schema`
+- **Anthropic**: Injects schema constraint into system prompt
+- **Validation**: Agent retries if response is not valid JSON
+
+---
+
+## RAG (Retrieval-Augmented Generation)
+
+Augment agent context with relevant documents from a vector store.
+
+### In-Memory Store
+
+```go
+import "github.com/PipeOpsHQ/agent-sdk-go/framework/rag"
+
+store := rag.NewMemoryStore()
+store.Add(ctx, []rag.Document{
+    {ID: "1", Content: "Go uses goroutines for concurrency", Embedding: vec1},
+    {ID: "2", Content: "Python uses asyncio", Embedding: vec2},
+})
+```
+
+### As Middleware (automatic context injection)
+
+```go
+retriever := &rag.SimpleRetriever{Embedder: myEmbedder, Store: store}
+mw := rag.NewAgentMiddleware(retriever, rag.WithTopK(3))
+
+a, _ := agent.New(provider, agent.WithMiddleware(mw))
+```
+
+### As Tool (agent-driven retrieval)
+
+```go
+tool := rag.NewSearchTool(retriever, 5)
+a, _ := agent.New(provider, agent.WithTool(tool))
+```
+
+### Custom Embedder
+
+Implement the `rag.Embedder` interface:
+
+```go
+type Embedder interface {
+    Embed(ctx context.Context, text string) ([]float64, error)
+    EmbedBatch(ctx context.Context, texts []string) ([][]float64, error)
+}
+```
+
+---
+
+## OpenTelemetry
+
+Bridge agent events to any OTel-compatible backend (Jaeger, Zipkin, Grafana):
+
+```go
+import (
+    "github.com/PipeOpsHQ/agent-sdk-go/framework/observe/otel"
+    sdktrace "go.opentelemetry.io/otel/sdk/trace"
+)
+
+tp := sdktrace.NewTracerProvider(/* your exporter */)
+sink := otel.NewSink(tp)
+
+a, _ := agent.New(provider, agent.WithObserver(sink))
+```
+
+Span naming: `agent.run`, `agent.llm.{provider}`, `agent.tool.{name}`, `agent.graph.{name}`, `agent.checkpoint`.

@@ -1,2 +1,39 @@
-.ai-agent
-vendor
+# Agent runtime data
+.ai-agent/
+
+# Dependencies
+vendor/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test/build artifacts
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3

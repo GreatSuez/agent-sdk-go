@@ -190,3 +190,24 @@ func Summary(results []Result) string {
 	}
 	return strings.Join(parts, "; ")
 }
+
+// CatalogEntry describes a guardrail for discovery/UI purposes.
+type CatalogEntry struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Direction   string `json:"direction"` // "input", "output", or "both"
+	Action      Action `json:"defaultAction"`
+	Configurable bool  `json:"configurable"`
+}
+
+// BuiltinCatalog returns metadata for all built-in guardrails.
+func BuiltinCatalog() []CatalogEntry {
+	return []CatalogEntry{
+		{Name: "max_length", Description: "Blocks input/output exceeding a character limit", Direction: "both", Action: ActionBlock, Configurable: true},
+		{Name: "prompt_injection", Description: "Detects prompt injection attacks using pattern matching", Direction: "both", Action: ActionBlock, Configurable: false},
+		{Name: "content_filter", Description: "Filters harmful, violent, or illegal content", Direction: "both", Action: ActionBlock, Configurable: false},
+		{Name: "pii_filter", Description: "Detects and redacts PII (SSN, credit cards, emails, phone numbers, IPs)", Direction: "both", Action: ActionRedact, Configurable: false},
+		{Name: "topic_filter", Description: "Restricts conversations to allowed topics via keyword matching", Direction: "both", Action: ActionBlock, Configurable: true},
+		{Name: "secret_guard", Description: "Detects and redacts secrets (API keys, tokens, passwords)", Direction: "both", Action: ActionRedact, Configurable: false},
+	}
+}

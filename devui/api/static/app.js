@@ -1580,6 +1580,7 @@ async function sendPlaygroundMessage() {
   const workflow = document.getElementById('playgroundWorkflow')?.value || '';
   const tools = Array.from(document.getElementById('playgroundTools')?.selectedOptions || []).map(o => o.value);
   const skills = Array.from(document.getElementById('playgroundSkills')?.selectedOptions || []).map(o => o.value);
+  const guardrails = Array.from(document.getElementById('playgroundGuardrails')?.selectedOptions || []).map(o => o.value);
   const systemPrompt = document.getElementById('playgroundSystemPrompt')?.value?.trim() || '';
 
   appendChatMessage('user', prompt);
@@ -1594,6 +1595,7 @@ async function sendPlaygroundMessage() {
     workflow,
     tools,
     skills,
+    guardrails,
     systemPrompt,
   };
 
@@ -1781,6 +1783,7 @@ function initPlayground() {
   loadFlows();
   loadToolCatalog();
   loadSkillsCatalog();
+  loadGuardrailsCatalog();
 }
 
 let _loadedFlows = [];
@@ -1882,6 +1885,29 @@ async function loadSkillsCatalog() {
     });
   } catch (e) {
     select.innerHTML = '<option disabled>Failed to load skills</option>';
+  }
+}
+
+async function loadGuardrailsCatalog() {
+  const select = document.getElementById('playgroundGuardrails');
+  if (!select) return;
+  try {
+    const data = await api.get('/api/v1/guardrails');
+    const guardrails = Array.isArray(data?.guardrails) ? data.guardrails : [];
+    select.innerHTML = '';
+    if (!guardrails.length) {
+      select.innerHTML = '<option disabled>No guardrails available</option>';
+      return;
+    }
+    guardrails.forEach(g => {
+      const opt = document.createElement('option');
+      opt.value = g.name;
+      opt.textContent = `${g.name} (${g.direction})`;
+      opt.title = g.description || '';
+      select.appendChild(opt);
+    });
+  } catch (e) {
+    select.innerHTML = '<option disabled>Failed to load guardrails</option>';
   }
 }
 
@@ -2023,6 +2049,7 @@ async function sendJsonPayload() {
   const workflow = document.getElementById('playgroundWorkflow')?.value || '';
   const tools = Array.from(document.getElementById('playgroundTools')?.selectedOptions || []).map(o => o.value);
   const skills = Array.from(document.getElementById('playgroundSkills')?.selectedOptions || []).map(o => o.value);
+  const guardrails = Array.from(document.getElementById('playgroundGuardrails')?.selectedOptions || []).map(o => o.value);
   const systemPrompt = document.getElementById('playgroundSystemPrompt')?.value?.trim() || '';
 
   const payload = {
@@ -2032,6 +2059,7 @@ async function sendJsonPayload() {
     workflow,
     tools,
     skills,
+    guardrails,
     systemPrompt,
   };
 

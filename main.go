@@ -26,6 +26,7 @@ import (
 	catalogsqlite "github.com/PipeOpsHQ/agent-sdk-go/framework/devui/catalog/sqlite"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/flow"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/graph"
+	"github.com/PipeOpsHQ/agent-sdk-go/framework/guardrail"
 	basicgraph "github.com/PipeOpsHQ/agent-sdk-go/framework/graphs/basic"
 	_ "github.com/PipeOpsHQ/agent-sdk-go/framework/graphs/chain"     // registers "chain" workflow
 	_ "github.com/PipeOpsHQ/agent-sdk-go/framework/graphs/mapreduce" // registers "map-reduce" workflow
@@ -55,6 +56,7 @@ type cliOptions struct {
 	tools          []string
 	systemPrompt   string
 	promptTemplate string
+	middlewares    []agentfw.Middleware
 }
 
 type uiOptions struct {
@@ -290,6 +292,9 @@ func buildAgent(provider llm.Provider, store state.Store, observer observe.Sink,
 	for _, tool := range toolset {
 		agentOpts = append(agentOpts, agentfw.WithTool(tool))
 	}
+	if len(opts.middlewares) > 0 {
+		agentOpts = append(agentOpts, agentfw.WithMiddleware(opts.middlewares...))
+	}
 	return agentfw.New(provider, agentOpts...)
 }
 
@@ -382,10 +387,36 @@ func (r *localPlaygroundRunner) Run(ctx context.Context, req devuiapi.Playground
 		req.SystemPrompt = systemPrompt
 	}
 
+	// Wire guardrails if requested
+	var guardrailMiddleware agentfw.Middleware
+	if len(req.Guardrails) > 0 {
+		pipeline := guardrail.NewPipeline()
+		for _, name := range req.Guardrails {
+			switch name {
+			case "max_length":
+				pipeline.Add(&guardrail.MaxLength{Limit: 10000})
+			case "prompt_injection":
+				pipeline.AddInput(&guardrail.PromptInjection{})
+			case "content_filter":
+				pipeline.Add(&guardrail.ContentFilter{})
+			case "pii_filter":
+				pipeline.Add(&guardrail.PIIFilter{})
+			case "topic_filter":
+				pipeline.Add(&guardrail.TopicFilter{})
+			case "secret_guard":
+				pipeline.Add(&guardrail.SecretGuard{})
+			}
+		}
+		guardrailMiddleware = guardrail.NewAgentMiddleware(pipeline)
+	}
+
 	opts := cliOptions{
 		workflow:     strings.TrimSpace(req.Workflow),
 		tools:        append([]string(nil), req.Tools...),
 		systemPrompt: strings.TrimSpace(req.SystemPrompt),
+	}
+	if guardrailMiddleware != nil {
+		opts.middlewares = append(opts.middlewares, guardrailMiddleware)
 	}
 	agent, err := buildAgent(provider, r.store, r.observer, opts)
 	if err != nil {
