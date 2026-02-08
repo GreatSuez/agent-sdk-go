@@ -91,6 +91,10 @@ type Options struct {
 	// AllowLocalNoAuth allows unauthenticated access from localhost.
 	// Default: true. Env: AGENT_UI_ALLOW_LOCAL_NOAUTH.
 	AllowLocalNoAuth bool
+
+	// DefaultFlow is the flow name to auto-select in the Playground UI.
+	// When set, the UI opens with this flow pre-selected instead of "(none)".
+	DefaultFlow string
 }
 
 // Start launches the DevUI server with sensible defaults. It blocks until
