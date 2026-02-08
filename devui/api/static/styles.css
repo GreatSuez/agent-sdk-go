@@ -1180,8 +1180,25 @@ body {
   font-size: 12px;
 }
 
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.zoom-level {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  min-width: 40px;
+  text-align: center;
+  user-select: none;
+}
+
 .topology-canvas-wrap {
   padding: 8px 16px 16px;
+  overflow: auto;
 }
 
 #workflowGraphSvg {
