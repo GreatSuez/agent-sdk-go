@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/flow"
+	"github.com/PipeOpsHQ/agent-sdk-go/framework/skill"
 	fwtools "github.com/PipeOpsHQ/agent-sdk-go/framework/tools"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/workflow"
 )
@@ -45,6 +46,7 @@ func (s *Server) handleReflect(w http.ResponseWriter, r *http.Request, _ princip
 			Metadata: map[string]any{
 				"workflow":     f.Workflow,
 				"tools":        f.Tools,
+				"skills":       f.Skills,
 				"inputExample": f.InputExample,
 			},
 		}
@@ -70,6 +72,25 @@ func (s *Server) handleReflect(w http.ResponseWriter, r *http.Request, _ princip
 			Key:  "/workflow/" + name,
 			Name: name,
 			Type: "workflow",
+		}
+		actions = append(actions, a)
+	}
+
+	// Skills
+	for _, sk := range skill.All() {
+		meta := map[string]any{
+			"source":       sk.Source,
+			"allowedTools": sk.AllowedTools,
+		}
+		for k, v := range sk.Metadata {
+			meta[k] = v
+		}
+		a := Action{
+			Key:         "/skill/" + sk.Name,
+			Name:        sk.Name,
+			Type:        "skill",
+			Description: sk.Description,
+			Metadata:    meta,
 		}
 		actions = append(actions, a)
 	}

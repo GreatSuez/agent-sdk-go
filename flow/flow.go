@@ -15,6 +15,7 @@ type Definition struct {
 	Description  string         `json:"description,omitempty"`
 	Workflow     string         `json:"workflow,omitempty"`
 	Tools        []string       `json:"tools,omitempty"`
+	Skills       []string       `json:"skills,omitempty"`
 	SystemPrompt string         `json:"systemPrompt,omitempty"`
 	InputExample string         `json:"inputExample,omitempty"`
 	InputSchema  map[string]any `json:"inputSchema,omitempty"`

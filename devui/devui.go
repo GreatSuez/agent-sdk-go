@@ -63,6 +63,7 @@ import (
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/runtime/distributed"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/runtime/queue"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/runtime/queue/redisstreams"
+	"github.com/PipeOpsHQ/agent-sdk-go/framework/skill"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/state"
 	statefactory "github.com/PipeOpsHQ/agent-sdk-go/framework/state/factory"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/tools"
@@ -114,6 +115,12 @@ func Start(ctx context.Context, opts ...Options) error {
 
 	if !o.SkipBuiltinFlows {
 		flow.RegisterBuiltins()
+	}
+
+	// Load skills: built-ins + local directories
+	skill.RegisterBuiltins()
+	if n := skill.ScanDefaults(); n > 0 {
+		log.Printf("📚 Loaded %d skill(s) from local directories", n)
 	}
 
 	// State store
@@ -350,6 +357,7 @@ func (r *playgroundRunner) Run(ctx context.Context, req devuiapi.PlaygroundReque
 	}
 
 	// Resolve flow defaults — request fields override flow defaults.
+	var flowSkills []string
 	if name := strings.TrimSpace(req.Flow); name != "" {
 		if f, ok := flow.Get(name); ok {
 			if strings.TrimSpace(req.Workflow) == "" {
@@ -361,6 +369,7 @@ func (r *playgroundRunner) Run(ctx context.Context, req devuiapi.PlaygroundReque
 			if strings.TrimSpace(req.SystemPrompt) == "" {
 				req.SystemPrompt = f.SystemPrompt
 			}
+			flowSkills = f.Skills
 		}
 	}
 
@@ -368,6 +377,18 @@ func (r *playgroundRunner) Run(ctx context.Context, req devuiapi.PlaygroundReque
 	systemPrompt := strings.TrimSpace(req.SystemPrompt)
 	if systemPrompt == "" {
 		systemPrompt = "You are a practical AI assistant. Be concise, accurate, and actionable."
+	}
+
+	// Resolve skills — append instructions to system prompt, expand allowed tools
+	for _, skillName := range flowSkills {
+		if s, ok := skill.Get(skillName); ok {
+			if s.Instructions != "" {
+				systemPrompt += "\n\n## Skill: " + s.Name + "\n" + s.Instructions
+			}
+			if len(s.AllowedTools) > 0 {
+				req.Tools = append(req.Tools, s.AllowedTools...)
+			}
+		}
 	}
 
 	// Build agent

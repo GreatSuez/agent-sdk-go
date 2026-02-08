@@ -167,6 +167,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/audit/logs", s.require(auth.RoleViewer, s.handleAuditLogs))
 	s.mux.HandleFunc("/api/v1/cron/jobs", s.require(auth.RoleViewer, s.handleCronJobs))
 	s.mux.HandleFunc("/api/v1/cron/jobs/", s.require(auth.RoleOperator, s.handleCronJobByName))
+	s.mux.HandleFunc("/api/v1/skills", s.require(auth.RoleViewer, s.handleSkills))
+	s.mux.HandleFunc("/api/v1/skills/", s.require(auth.RoleViewer, s.handleSkillByName))
 	s.mux.HandleFunc("/api/v1/flows", s.require(auth.RoleViewer, s.handleFlows))
 	s.mux.HandleFunc("/api/v1/reflect", s.require(auth.RoleViewer, s.handleReflect))
 	s.mux.HandleFunc("/api/v1/actions/run", s.require(auth.RoleOperator, s.handleRunAction))

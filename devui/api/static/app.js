@@ -125,6 +125,7 @@ function switchTab(tab) {
   document.getElementById(`tab-${tab}`)?.classList.add('active');
   if (tab === 'scheduler') loadCronJobs();
   if (tab === 'actions') loadActions();
+  if (tab === 'skills') loadSkills();
 }
 
 function initNavigation() {
@@ -2829,6 +2830,101 @@ async function runAction() {
     btn.disabled = false;
     btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polygon points="5,3 19,12 5,21"/></svg> Run`;
   }
+}
+
+// ===== Skills =====
+async function loadSkills() {
+  try {
+    const res = await api('/api/v1/skills');
+    const body = document.getElementById('skillsListBody');
+    if (!res.skills || res.skills.length === 0) {
+      body.innerHTML = '<div class="empty-state"><p>No skills installed</p></div>';
+      return;
+    }
+    let html = '<div class="skills-grid">';
+    for (const sk of res.skills) {
+      const tools = (sk.allowedTools || []).join(', ') || 'none';
+      const meta = sk.metadata || {};
+      const tags = Object.entries(meta).map(([k,v]) => `<span class="badge">${k}: ${v}</span>`).join(' ');
+      html += `<div class="skill-card" onclick="viewSkillDetail('${sk.name}')">
+        <div class="skill-card-header">
+          <span class="skill-name">${sk.name}</span>
+          <span class="badge badge-${sk.source === 'builtin' ? 'info' : 'success'}">${sk.source}</span>
+        </div>
+        <p class="skill-desc">${sk.description || ''}</p>
+        <div class="skill-meta">
+          <span class="text-muted">Tools: ${tools}</span>
+          ${tags ? '<div style="margin-top:4px;">' + tags + '</div>' : ''}
+        </div>
+      </div>`;
+    }
+    html += '</div>';
+    body.innerHTML = html;
+  } catch (e) {
+    document.getElementById('skillsListBody').innerHTML = `<div class="empty-state"><p>Error loading skills: ${e.message}</p></div>`;
+  }
+}
+
+async function viewSkillDetail(name) {
+  try {
+    const sk = await api(`/api/v1/skills/${name}`);
+    document.getElementById('skillDetail').style.display = '';
+    document.getElementById('skillDetailName').textContent = sk.name;
+    const tools = (sk.allowedTools || []).join(', ') || 'none';
+    let html = `<p><strong>Description:</strong> ${sk.description || 'N/A'}</p>`;
+    html += `<p><strong>Source:</strong> ${sk.source || 'N/A'}</p>`;
+    html += `<p><strong>License:</strong> ${sk.license || 'N/A'}</p>`;
+    html += `<p><strong>Allowed Tools:</strong> ${tools}</p>`;
+    if (sk.path) html += `<p><strong>Path:</strong> <code>${sk.path}</code></p>`;
+    if (sk.instructions) {
+      html += `<details open><summary><strong>Instructions</strong></summary><pre class="skill-instructions">${escapeHtml(sk.instructions)}</pre></details>`;
+    }
+    if (sk.source !== 'builtin') {
+      html += `<div style="margin-top:12px;"><button class="btn btn-danger" onclick="removeSkill('${name}')">Remove Skill</button></div>`;
+    }
+    document.getElementById('skillDetailBody').innerHTML = html;
+  } catch (e) {
+    document.getElementById('skillDetailBody').innerHTML = `<p class="text-error">Error: ${e.message}</p>`;
+  }
+}
+
+async function removeSkill(name) {
+  if (!confirm(`Remove skill "${name}"?`)) return;
+  try {
+    await api(`/api/v1/skills/${name}`, { method: 'DELETE' });
+    document.getElementById('skillDetail').style.display = 'none';
+    loadSkills();
+  } catch (e) {
+    alert('Failed to remove skill: ' + e.message);
+  }
+}
+
+function toggleSkillInstallForm() {
+  const form = document.getElementById('skillInstallForm');
+  form.style.display = form.style.display === 'none' ? '' : 'none';
+}
+
+async function installSkillFromGitHub() {
+  const repoUrl = document.getElementById('skillRepoUrl').value.trim();
+  if (!repoUrl) { alert('Repository URL is required'); return; }
+  try {
+    const res = await api('/api/v1/skills', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repoUrl }),
+    });
+    alert(`Installed ${res.count} skill(s) from ${repoUrl}`);
+    toggleSkillInstallForm();
+    loadSkills();
+  } catch (e) {
+    alert('Install failed: ' + e.message);
+  }
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
 }
 
 // ===== Bootstrap =====
