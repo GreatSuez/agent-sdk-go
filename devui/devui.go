@@ -252,6 +252,7 @@ func Start(ctx context.Context, opts ...Options) error {
 		Scheduler:        scheduler,
 		RequireAPIKey:    o.RequireAPIKey,
 		AllowLocalNoAuth: o.AllowLocalNoAuth,
+		DefaultFlow:      o.DefaultFlow,
 	})
 
 	log.Printf("DevUI listening on http://%s", o.Addr)

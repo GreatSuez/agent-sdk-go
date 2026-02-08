@@ -128,7 +128,9 @@ func runDevUI() {
 		},
 	})
 
-	if err := devui.Start(context.Background()); err != nil {
+	if err := devui.Start(context.Background(), devui.Options{
+		DefaultFlow: "quickstart-agent",
+	}); err != nil {
 		log.Fatal(err)
 	}
 }

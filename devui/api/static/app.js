@@ -1582,17 +1582,26 @@ async function loadFlows() {
   const select = document.getElementById('playgroundFlow');
   if (!select) return;
   try {
-    const data = await api.get('/api/v1/flows');
+    const [data, configData] = await Promise.all([
+      api.get('/api/v1/flows'),
+      api.get('/api/v1/config').catch(() => ({})),
+    ]);
     const flows = Array.isArray(data?.flows) ? data.flows : [];
     _loadedFlows = flows;
+    const defaultFlow = configData?.defaultFlow || '';
     // Keep the (none) option, add flows
     select.innerHTML = '<option value="">(none — configure manually)</option>';
     flows.forEach(f => {
       const opt = document.createElement('option');
       opt.value = f.name;
       opt.textContent = f.name;
+      if (f.name === defaultFlow) opt.selected = true;
       select.appendChild(opt);
     });
+    // Trigger flow selection if a default is set
+    if (defaultFlow && flows.some(f => f.name === defaultFlow)) {
+      onFlowSelected();
+    }
   } catch (e) {
     // Flows endpoint not available — that's OK
   }

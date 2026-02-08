@@ -170,7 +170,8 @@ func runDevUI() {
 	})
 
 	if err := devui.Start(context.Background(), devui.Options{
-		Addr: "127.0.0.1:8000",
+		Addr:        "127.0.0.1:8000",
+		DefaultFlow: "secops-analyzer",
 	}); err != nil {
 		log.Fatal(err)
 	}

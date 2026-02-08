@@ -141,7 +141,8 @@ func runDevUI() {
 
 	addr := "127.0.0.1:8000"
 	if err := devui.Start(context.Background(), devui.Options{
-		Addr: addr,
+		Addr:        addr,
+		DefaultFlow: "log-analyzer",
 	}); err != nil {
 		log.Fatal(err)
 	}

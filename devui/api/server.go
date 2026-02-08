@@ -40,6 +40,7 @@ type Config struct {
 	Scheduler        *cronpkg.Scheduler
 	RequireAPIKey    bool
 	AllowLocalNoAuth bool
+	DefaultFlow      string
 }
 
 type Server struct {
@@ -157,6 +158,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/flows", s.require(auth.RoleViewer, s.handleFlows))
 	s.mux.HandleFunc("/api/v1/reflect", s.require(auth.RoleViewer, s.handleReflect))
 	s.mux.HandleFunc("/api/v1/actions/run", s.require(auth.RoleOperator, s.handleRunAction))
+	s.mux.HandleFunc("/api/v1/config", s.handleConfig)
 
 	staticRoot, _ := fs.Sub(staticFiles, "static")
 	files := http.FileServer(http.FS(staticRoot))
@@ -927,6 +929,16 @@ func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request, _ principal
 	writeJSON(w, http.StatusOK, map[string]any{
 		"flows": defs,
 		"count": len(defs),
+	})
+}
+
+func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"defaultFlow": s.cfg.DefaultFlow,
 	})
 }
 
