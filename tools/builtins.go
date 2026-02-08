@@ -193,6 +193,11 @@ func init() {
 		"View and search log files: tail, head, grep patterns, journalctl for systemd services.",
 		func() Tool { return NewLogViewer() },
 	)
+	MustRegisterTool(
+		"todo_manager",
+		"Manage a task/todo list: add, update, remove, and list items with status, priority, dependencies, and tags.",
+		func() Tool { return NewTodoManager() },
+	)
 
 	// Register bundles
 	MustRegisterBundle("default", "Default built-in toolset", []string{
@@ -245,6 +250,7 @@ func init() {
 
 	MustRegisterBundle("memory", "State and memory tools", []string{
 		"memory_store",
+		"todo_manager",
 	})
 
 	MustRegisterBundle("text", "Text processing tools", []string{
@@ -319,5 +325,6 @@ func init() {
 		"kubectl",
 		"k3s",
 		"cron_manager",
+		"todo_manager",
 	})
 }
