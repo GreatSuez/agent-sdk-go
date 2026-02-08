@@ -96,6 +96,14 @@ func (c *Client) Generate(ctx context.Context, req types.Request) (types.Respons
 		payload.Tools = toOpenAITools(req.Tools)
 	}
 
+	// Structured output via response_format
+	if len(req.ResponseSchema) > 0 {
+		payload.ResponseFormat = &openAIRespFmt{
+			Type:       "json_schema",
+			JSONSchema: req.ResponseSchema,
+		}
+	}
+
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return types.Response{}, fmt.Errorf("failed to marshal openai request: %w", err)
@@ -255,11 +263,17 @@ func normalizeJSONArgs(raw string) json.RawMessage {
 }
 
 type openAIRequest struct {
-	Model      string          `json:"model"`
-	Messages   []openAIMessage `json:"messages"`
-	Tools      []openAITool    `json:"tools,omitempty"`
-	ToolChoice string          `json:"tool_choice,omitempty"`
-	MaxTokens  int             `json:"max_tokens,omitempty"`
+	Model          string          `json:"model"`
+	Messages       []openAIMessage `json:"messages"`
+	Tools          []openAITool    `json:"tools,omitempty"`
+	ToolChoice     string          `json:"tool_choice,omitempty"`
+	MaxTokens      int             `json:"max_tokens,omitempty"`
+	ResponseFormat *openAIRespFmt  `json:"response_format,omitempty"`
+}
+
+type openAIRespFmt struct {
+	Type       string         `json:"type"`
+	JSONSchema map[string]any `json:"json_schema,omitempty"`
 }
 
 type openAIMessage struct {

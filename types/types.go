@@ -39,6 +39,7 @@ type Request struct {
 	Messages        []Message        `json:"messages"`
 	Tools           []ToolDefinition `json:"tools,omitempty"`
 	MaxOutputTokens int              `json:"maxOutputTokens,omitempty"`
+	ResponseSchema  map[string]any   `json:"responseSchema,omitempty"`
 }
 
 type Usage struct {

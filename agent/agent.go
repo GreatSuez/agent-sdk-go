@@ -34,6 +34,7 @@ type Agent struct {
 	observer            observe.Sink
 	conversationHistory []types.Message
 	contextManager      *ContextManager
+	responseSchema      map[string]any
 
 	mu        sync.RWMutex
 	tools     map[string]tools.Tool
@@ -180,6 +181,12 @@ func WithTool(tool tools.Tool) Option {
 	}
 }
 
+// WithResponseSchema sets a JSON schema that the LLM response must conform to.
+// Providers that support structured output will enforce the schema natively.
+func WithResponseSchema(schema map[string]any) Option {
+	return func(a *Agent) { a.responseSchema = schema }
+}
+
 func New(provider llm.Provider, opts ...Option) (*Agent, error) {
 	if provider == nil {
 		return nil, errors.New("provider is required")
@@ -280,6 +287,7 @@ func (a *Agent) RunDetailed(ctx context.Context, input string) (types.RunResult,
 			Messages:        trimmedMessages,
 			Tools:           toolDefs,
 			MaxOutputTokens: a.maxOutputTokens,
+			ResponseSchema:  a.responseSchema,
 		}
 
 		genStarted := time.Now().UTC()

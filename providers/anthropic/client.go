@@ -91,6 +91,13 @@ func (c *Client) Generate(ctx context.Context, req types.Request) (types.Respons
 		MaxTokens: maxTokens,
 		Messages:  toAnthropicMessages(req.Messages),
 	}
+
+	// Structured output: inject schema instruction (Claude has no native schema enforcement)
+	if len(req.ResponseSchema) > 0 {
+		schemaJSON, _ := json.Marshal(req.ResponseSchema)
+		payload.System += "\n\nYou MUST respond with valid JSON matching this schema:\n```json\n" + string(schemaJSON) + "\n```\nRespond ONLY with the JSON object, no other text."
+	}
+
 	if len(req.Tools) > 0 {
 		payload.Tools = toAnthropicTools(req.Tools)
 		payload.ToolChoice = &anthropicToolChoice{Type: "auto"}
