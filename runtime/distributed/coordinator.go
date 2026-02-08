@@ -49,7 +49,7 @@ type coordinator struct {
 	policy    RuntimePolicy
 	queueName string
 	mu        sync.Mutex
-	cancelled map[string]bool
+	cancelled map[string]time.Time // value = when cancelled; entries expire after 1 hour
 	started   bool
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -77,7 +77,7 @@ func NewCoordinator(store state.Store, attempts AttemptStore, queueStore queue.Q
 		observer:  observer,
 		policy:    policy,
 		queueName: queueName,
-		cancelled: map[string]bool{},
+		cancelled: map[string]time.Time{},
 	}, nil
 }
 
@@ -142,9 +142,22 @@ func (c *coordinator) setCancelled(runID string, value bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.cancelled == nil {
-		c.cancelled = map[string]bool{}
+		c.cancelled = map[string]time.Time{}
 	}
-	c.cancelled[runID] = value
+	if value {
+		c.cancelled[runID] = time.Now()
+	} else {
+		delete(c.cancelled, runID)
+	}
+	// Purge entries older than 1 hour to prevent unbounded growth.
+	if len(c.cancelled) > 100 {
+		cutoff := time.Now().Add(-1 * time.Hour)
+		for id, ts := range c.cancelled {
+			if ts.Before(cutoff) {
+				delete(c.cancelled, id)
+			}
+		}
+	}
 }
 
 func (c *coordinator) SubmitRun(ctx context.Context, req SubmitRequest) (SubmitResult, error) {

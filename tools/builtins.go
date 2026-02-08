@@ -145,6 +145,55 @@ func init() {
 		func() Tool { return NewK3s() },
 	)
 
+	// Cron/Scheduling tools (scheduler injected at runtime by DevUI)
+	MustRegisterTool(
+		"cron_manager",
+		"Schedule recurring agent tasks with cron expressions. Use when asked to: run something periodically, schedule a job, set up a recurring check, automate a task on a timer, create a cron job. Operations: list, add, remove, trigger, enable, disable.",
+		func() Tool { return NewCronManager(nil) },
+	)
+
+	// Linux system tools
+	MustRegisterTool(
+		"curl",
+		"curl-style HTTP client with auth, cookies, TLS options, redirect following, and verbose timing. More featured than http_client.",
+		func() Tool { return NewCurl() },
+	)
+	MustRegisterTool(
+		"dns_lookup",
+		"Resolve DNS records: A, AAAA, MX, NS, TXT, CNAME, SRV, PTR. Supports custom DNS servers.",
+		func() Tool { return NewDNSLookup() },
+	)
+	MustRegisterTool(
+		"network_utils",
+		"Network utilities: ping hosts, check ports, scan port ranges, resolve hostnames.",
+		func() Tool { return NewNetworkUtils() },
+	)
+	MustRegisterTool(
+		"process_manager",
+		"List, find, and inspect running processes. Get top CPU/memory consumers. Like ps, top, pgrep.",
+		func() Tool { return NewProcessManager() },
+	)
+	MustRegisterTool(
+		"disk_usage",
+		"Check disk space (df) and directory sizes (du). Shows filesystem usage and largest directories.",
+		func() Tool { return NewDiskUsage() },
+	)
+	MustRegisterTool(
+		"system_info",
+		"Get system information: hostname, OS, CPU, memory, uptime, network interfaces. Like uname, free, hostnamectl.",
+		func() Tool { return NewSystemInfo() },
+	)
+	MustRegisterTool(
+		"archive",
+		"Create, extract, and list archives: tar, tar.gz, tar.bz2, tar.xz, zip.",
+		func() Tool { return NewArchive() },
+	)
+	MustRegisterTool(
+		"log_viewer",
+		"View and search log files: tail, head, grep patterns, journalctl for systemd services.",
+		func() Tool { return NewLogViewer() },
+	)
+
 	// Register bundles
 	MustRegisterBundle("default", "Default built-in toolset", []string{
 		"calculator",
@@ -177,6 +226,9 @@ func init() {
 	MustRegisterBundle("network", "Network and API tools", []string{
 		"http_client",
 		"web_scraper",
+		"curl",
+		"dns_lookup",
+		"network_utils",
 	})
 
 	MustRegisterBundle("system", "System interaction tools", []string{
@@ -184,6 +236,11 @@ func init() {
 		"file_system",
 		"env_vars",
 		"tmpdir",
+		"process_manager",
+		"disk_usage",
+		"system_info",
+		"log_viewer",
+		"archive",
 	})
 
 	MustRegisterBundle("memory", "State and memory tools", []string{
@@ -213,6 +270,21 @@ func init() {
 		"k3s",
 	})
 
+	MustRegisterBundle("scheduling", "Cron and scheduling tools", []string{
+		"cron_manager",
+	})
+
+	MustRegisterBundle("linux", "Essential Linux system tools", []string{
+		"curl",
+		"dns_lookup",
+		"network_utils",
+		"process_manager",
+		"disk_usage",
+		"system_info",
+		"archive",
+		"log_viewer",
+	})
+
 	MustRegisterBundle("all", "All available built-in tools", []string{
 		"calculator",
 		"secret_redactor",
@@ -229,14 +301,23 @@ func init() {
 		"diff_generator",
 		"http_client",
 		"web_scraper",
+		"curl",
+		"dns_lookup",
+		"network_utils",
 		"shell_command",
 		"file_system",
 		"env_vars",
 		"memory_store",
 		"tmpdir",
+		"process_manager",
+		"disk_usage",
+		"system_info",
+		"archive",
+		"log_viewer",
 		"docker",
 		"docker_compose",
 		"kubectl",
 		"k3s",
+		"cron_manager",
 	})
 }

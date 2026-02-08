@@ -17,18 +17,22 @@ import (
 )
 
 type Agent struct {
-	provider        llm.Provider
-	store           state.Store
-	executionMode   ExecutionMode
-	systemPrompt    string
-	sessionID       string
-	maxIterations   int
-	maxOutputTokens int
-	retryPolicy     RetryPolicy
-	toolTimeout     time.Duration
-	parallelTools   bool
-	middlewares     []Middleware
-	observer        observe.Sink
+	provider            llm.Provider
+	store               state.Store
+	executionMode       ExecutionMode
+	systemPrompt        string
+	sessionID           string
+	maxIterations       int
+	maxOutputTokens     int
+	maxInputTokens      int
+	retryPolicy         RetryPolicy
+	toolTimeout         time.Duration
+	parallelTools       bool
+	maxParallelTools    int
+	middlewares         []Middleware
+	observer            observe.Sink
+	conversationHistory []types.Message
+	contextManager      *ContextManager
 
 	mu        sync.RWMutex
 	tools     map[string]tools.Tool
@@ -64,6 +68,18 @@ func WithMaxOutputTokens(max int) Option {
 	}
 }
 
+// WithMaxInputTokens sets the maximum input tokens for context management.
+// This enables automatic trimming of conversation history to prevent
+// exceeding provider rate limits. If not set, defaults to 25000 tokens.
+func WithMaxInputTokens(max int) Option {
+	return func(a *Agent) {
+		if max > 0 {
+			a.maxInputTokens = max
+			a.contextManager = NewContextManager(max)
+		}
+	}
+}
+
 // WithProviderRetries is kept for backward compatibility.
 func WithProviderRetries(retries int) Option {
 	return func(a *Agent) {
@@ -94,6 +110,14 @@ func WithParallelToolCalls(enabled bool) Option {
 	return func(a *Agent) { a.parallelTools = enabled }
 }
 
+func WithMaxParallelTools(max int) Option {
+	return func(a *Agent) {
+		if max > 0 {
+			a.maxParallelTools = max
+		}
+	}
+}
+
 func WithStore(store state.Store) Option {
 	return func(a *Agent) { a.store = store }
 }
@@ -103,6 +127,15 @@ func WithSessionID(sessionID string) Option {
 		if sessionID != "" {
 			a.sessionID = sessionID
 		}
+	}
+}
+
+// WithConversationHistory prepends previous conversation messages before
+// the current user input. This enables multi-turn conversations where the
+// LLM has context from prior exchanges in the same session.
+func WithConversationHistory(messages []types.Message) Option {
+	return func(a *Agent) {
+		a.conversationHistory = messages
 	}
 }
 
@@ -152,11 +185,14 @@ func New(provider llm.Provider, opts ...Option) (*Agent, error) {
 	}
 
 	a := &Agent{
-		provider:      provider,
-		executionMode: ExecutionModeLocal,
-		maxIterations: 6,
-		tools:         make(map[string]tools.Tool),
-		retryPolicy:   defaultRetryPolicy(),
+		provider:         provider,
+		executionMode:    ExecutionModeLocal,
+		maxIterations:    6,
+		maxParallelTools: 10,
+		maxInputTokens:   DefaultMaxInputTokens,
+		tools:            make(map[string]tools.Tool),
+		retryPolicy:      defaultRetryPolicy(),
+		contextManager:   NewContextManager(DefaultMaxInputTokens),
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -182,9 +218,18 @@ func (a *Agent) RunDetailed(ctx context.Context, input string) (types.RunResult,
 	sessionID := a.ensureSessionID()
 	startedAt := time.Now().UTC()
 
-	messages := []types.Message{
-		{Role: types.RoleUser, Content: input},
+	// Prepend conversation history for multi-turn context, then add current input.
+	var messages []types.Message
+	if len(a.conversationHistory) > 0 {
+		messages = make([]types.Message, 0, len(a.conversationHistory)+1)
+		for _, m := range a.conversationHistory {
+			// Only carry forward user/assistant content messages (skip tool call details).
+			if m.Role == types.RoleUser || (m.Role == types.RoleAssistant && m.Content != "" && len(m.ToolCalls) == 0) {
+				messages = append(messages, types.Message{Role: m.Role, Content: m.Content})
+			}
+		}
 	}
+	messages = append(messages, types.Message{Role: types.RoleUser, Content: input})
 	usage := &types.Usage{}
 	hasUsage := false
 	events := []types.Event{
@@ -219,10 +264,20 @@ func (a *Agent) RunDetailed(ctx context.Context, input string) (types.RunResult,
 
 	for i := 0; i < a.maxIterations; i++ {
 		iteration := i + 1
+
+		// Apply context trimming to prevent exceeding token limits
+		toolDefs := a.listToolDefinitions()
+		trimmedMessages := a.contextManager.TrimMessages(
+			messages,
+			a.systemPrompt,
+			toolDefs,
+			a.maxOutputTokens, // Reserve space for expected output
+		)
+
 		req := types.Request{
 			SystemPrompt:    a.systemPrompt,
-			Messages:        messages,
-			Tools:           a.listToolDefinitions(),
+			Messages:        trimmedMessages,
+			Tools:           toolDefs,
 			MaxOutputTokens: a.maxOutputTokens,
 		}
 
@@ -401,12 +456,34 @@ func (a *Agent) generateWithRetry(ctx context.Context, req types.Request) (types
 	policy := normalizeRetryPolicy(a.retryPolicy)
 
 	var lastErr error
+	rateLimitAttempts := 0
+
 	for attempt := 1; attempt <= policy.MaxAttempts; attempt++ {
 		resp, err := a.provider.Generate(ctx, req)
 		if err == nil {
 			return resp, nil
 		}
 		lastErr = err
+
+		// Check if this is a rate limit error
+		if IsRateLimitError(err) {
+			rateLimitAttempts++
+			if rateLimitAttempts > policy.RateLimitMaxAttempts {
+				return types.Response{}, fmt.Errorf("provider %q rate limited after %d attempt(s): %w", a.provider.Name(), rateLimitAttempts, lastErr)
+			}
+
+			// Use longer backoff for rate limits
+			backoff := policy.rateLimitBackoffForAttempt(rateLimitAttempts)
+			select {
+			case <-ctx.Done():
+				return types.Response{}, ctx.Err()
+			case <-time.After(backoff):
+			}
+			// Don't count rate limit retries against regular attempts
+			attempt--
+			continue
+		}
+
 		if attempt == policy.MaxAttempts {
 			break
 		}
@@ -445,6 +522,14 @@ func (a *Agent) executeToolCalls(
 	eventSets := make([][]types.Event, len(calls))
 
 	if a.parallelTools && len(calls) > 1 {
+		maxConcurrent := a.maxParallelTools
+		if maxConcurrent <= 0 {
+			maxConcurrent = 10
+		}
+		if maxConcurrent > len(calls) {
+			maxConcurrent = len(calls)
+		}
+		sem := make(chan struct{}, maxConcurrent)
 		var (
 			wg       sync.WaitGroup
 			errMu    sync.Mutex
@@ -453,8 +538,10 @@ func (a *Agent) executeToolCalls(
 		wg.Add(len(calls))
 		for i, call := range calls {
 			i, call := i, call
+			sem <- struct{}{} // acquire
 			go func() {
 				defer wg.Done()
+				defer func() { <-sem }() // release
 				msg, evs, err := a.executeOneToolCall(ctx, runID, sessionID, iteration, toolset, call)
 				if err != nil {
 					errMu.Lock()

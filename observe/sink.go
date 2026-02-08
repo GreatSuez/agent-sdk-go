@@ -3,6 +3,7 @@ package observe
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 type Sink interface {
@@ -62,6 +63,8 @@ func (m *MultiSink) Emit(ctx context.Context, event Event) error {
 type AsyncSink struct {
 	downstream Sink
 	queue      chan Event
+	done       chan struct{}
+	wg         sync.WaitGroup
 	once       sync.Once
 }
 
@@ -75,7 +78,9 @@ func NewAsyncSink(downstream Sink, buffer int) *AsyncSink {
 	as := &AsyncSink{
 		downstream: downstream,
 		queue:      make(chan Event, buffer),
+		done:       make(chan struct{}),
 	}
+	as.wg.Add(1)
 	go as.loop()
 	return as
 }
@@ -86,8 +91,15 @@ func (s *AsyncSink) Emit(ctx context.Context, event Event) error {
 	}
 	event.Normalize()
 	select {
+	case <-s.done:
+		return nil // sink is closing, drop silently
+	default:
+	}
+	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-s.done:
+		return nil
 	case s.queue <- event:
 		return nil
 	default:
@@ -100,11 +112,18 @@ func (s *AsyncSink) Close() {
 	if s == nil {
 		return
 	}
-	s.once.Do(func() { close(s.queue) })
+	s.once.Do(func() {
+		close(s.done)  // signal loop to drain and exit
+		close(s.queue) // unblock range loop
+		s.wg.Wait()    // wait for loop goroutine to finish
+	})
 }
 
 func (s *AsyncSink) loop() {
+	defer s.wg.Done()
 	for event := range s.queue {
-		_ = s.downstream.Emit(context.Background(), event)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = s.downstream.Emit(ctx, event)
+		cancel()
 	}
 }

@@ -5,6 +5,7 @@ go 1.24.1
 require (
 	github.com/google/uuid v1.6.0
 	github.com/redis/go-redis/v9 v9.17.3
+	github.com/robfig/cron/v3 v3.0.1
 	golang.org/x/net v0.41.0
 	google.golang.org/genai v1.41.0
 	modernc.org/sqlite v1.37.1
@@ -30,7 +31,6 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/robfig/cron/v3 v3.0.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0 // indirect
 	go.opentelemetry.io/otel v1.36.0 // indirect

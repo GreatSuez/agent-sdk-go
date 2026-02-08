@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -96,9 +97,13 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
+		log.Println("\n⏳ Shutdown signal received, gracefully stopping...")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = s.http.Shutdown(shutdownCtx)
+		if err := s.http.Shutdown(shutdownCtx); err != nil {
+			log.Printf("⚠️  HTTP shutdown error: %v", err)
+		}
+		log.Println("✅ Server stopped")
 		return ctx.Err()
 	case err := <-errCh:
 		return err
@@ -111,9 +116,15 @@ func (s *Server) Close() error {
 	}
 	var outErr error
 	s.once.Do(func() {
+		log.Println("⏳ Closing server...")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		outErr = s.http.Shutdown(shutdownCtx)
+		if outErr != nil {
+			log.Printf("⚠️  Server close error: %v", outErr)
+		} else {
+			log.Println("✅ Server closed")
+		}
 	})
 	return outErr
 }
@@ -135,6 +146,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/runtime/details", s.require(auth.RoleViewer, s.handleRuntimeDetails))
 	s.mux.HandleFunc("/api/v1/runtime/runs/", s.require(auth.RoleViewer, s.handleRuntimeRunActions))
 	s.mux.HandleFunc("/api/v1/playground/run", s.require(auth.RoleViewer, s.handlePlaygroundRun))
+	s.mux.HandleFunc("/api/v1/playground/stream", s.require(auth.RoleViewer, s.handlePlaygroundStream))
 	s.mux.HandleFunc("/api/v1/commands/execute", s.require(auth.RoleViewer, s.handleCommandExecute))
 
 	s.mux.HandleFunc("/api/v1/tools/registry", s.require(auth.RoleViewer, s.handleToolRegistry))
@@ -457,16 +469,24 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request, _ principal) 
 		case <-r.Context().Done():
 			return
 		case <-ping.C:
-			_, _ = w.Write([]byte(": keepalive\n\n"))
+			if _, err := w.Write([]byte(": keepalive\n\n")); err != nil {
+				return // client disconnected
+			}
 			flusher.Flush()
 		case event := <-ch:
 			if !eventMatchesFilter(event, runIDFilter, kindFilter, statusFilter) {
 				continue
 			}
 			payload, _ := json.Marshal(event)
-			_, _ = w.Write([]byte("data: "))
-			_, _ = w.Write(payload)
-			_, _ = w.Write([]byte("\n\n"))
+			if _, err := w.Write([]byte("data: ")); err != nil {
+				return
+			}
+			if _, err := w.Write(payload); err != nil {
+				return
+			}
+			if _, err := w.Write([]byte("\n\n")); err != nil {
+				return
+			}
 			flusher.Flush()
 		}
 	}
@@ -688,6 +708,104 @@ func (s *Server) handlePlaygroundRun(w http.ResponseWriter, r *http.Request, _ p
 		resp.Status = "completed"
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handlePlaygroundStream(w http.ResponseWriter, r *http.Request, _ principal) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
+		return
+	}
+	if s.cfg.Playground == nil {
+		writeError(w, http.StatusNotImplemented, fmt.Errorf("playground runner not configured"))
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("streaming unsupported"))
+		return
+	}
+
+	var req PlaygroundRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	// Subscribe to the event stream to capture events during this run
+	subID, eventCh := s.stream.subscribe(64)
+	defer s.stream.unsubscribe(subID)
+
+	// Run playground in a goroutine, stream events as they arrive
+	type runResult struct {
+		resp PlaygroundResponse
+		err  error
+	}
+	done := make(chan runResult, 1)
+	go func() {
+		resp, err := s.cfg.Playground.Run(r.Context(), req)
+		done <- runResult{resp, err}
+	}()
+
+	sendSSE := func(eventType string, data any) {
+		b, _ := json.Marshal(data)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, b)
+		flusher.Flush()
+	}
+
+	// Stream events until the run completes
+	for {
+		select {
+		case event := <-eventCh:
+			sendSSE("progress", map[string]any{
+				"kind":     event.Kind,
+				"status":   event.Status,
+				"name":     event.Name,
+				"message":  event.Message,
+				"toolName": event.ToolName,
+				"runId":    event.RunID,
+			})
+		case result := <-done:
+			// Drain any remaining events
+			for {
+				select {
+				case event := <-eventCh:
+					sendSSE("progress", map[string]any{
+						"kind":     event.Kind,
+						"status":   event.Status,
+						"name":     event.Name,
+						"message":  event.Message,
+						"toolName": event.ToolName,
+						"runId":    event.RunID,
+					})
+				default:
+					goto drained
+				}
+			}
+		drained:
+			if result.err != nil {
+				sendSSE("complete", PlaygroundResponse{
+					Status: "failed",
+					Error:  result.err.Error(),
+				})
+			} else {
+				resp := result.resp
+				if strings.TrimSpace(resp.Status) == "" {
+					resp.Status = "completed"
+				}
+				sendSSE("complete", resp)
+			}
+			return
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func (s *Server) handleToolTemplates(w http.ResponseWriter, r *http.Request, p principal) {

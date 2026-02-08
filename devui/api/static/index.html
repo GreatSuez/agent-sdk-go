@@ -337,7 +337,15 @@
         <section id="tab-playground" class="tab">
           <div class="page-header">
             <h1>Playground</h1>
-            <p class="page-subtitle">Select an agent flow and test it interactively</p>
+            <div style="display:flex;align-items:center;gap:12px;">
+              <p class="page-subtitle" style="margin:0;">Select an agent flow and test it interactively</p>
+              <button class="btn btn-ghost btn-sm" id="toggleHistoryBtn" onclick="togglePlaygroundHistory()" title="Toggle history panel">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                  <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                History
+              </button>
+            </div>
           </div>
 
           <!-- Flow Picker Bar -->
@@ -361,7 +369,10 @@
                 <div class="config-group">
                   <label>Workflow</label>
                   <select id="playgroundWorkflow" class="select">
-                    <option value="basic">basic</option>
+                    <option value="basic">basic — single-agent pass</option>
+                    <option value="chain">chain — analyze → plan → execute → synthesize</option>
+                    <option value="router">router — classify → route to specialist</option>
+                    <option value="map-reduce">map-reduce — split → process → combine</option>
                   </select>
                 </div>
                 <div class="config-group">
@@ -425,6 +436,35 @@
               <div id="jsonResultOutput" class="json-result" style="display:none;">
                 <label>Output</label>
                 <pre id="jsonResultContent" class="json-output"></pre>
+              </div>
+            </div>
+
+            <!-- History Panel (collapsible) -->
+            <div class="playground-history" id="playgroundHistory" style="display:none;">
+              <div class="history-header">
+                <h3>Conversation History</h3>
+                <button class="btn btn-ghost btn-sm" onclick="togglePlaygroundHistory()" title="Close">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <path d="M18 6L6 18M6 6l12 12"/>
+                  </svg>
+                </button>
+              </div>
+              <div class="history-actions">
+                <button class="btn btn-sm btn-primary" onclick="startNewConversation()" title="New conversation">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <path d="M12 5v14M5 12h14"/>
+                  </svg>
+                  New
+                </button>
+                <button class="btn btn-sm btn-ghost" onclick="loadPlaygroundHistory()" title="Refresh">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <path d="M1 4v6h6M23 20v-6h-6"/>
+                    <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/>
+                  </svg>
+                </button>
+              </div>
+              <div class="history-list" id="historyList">
+                <div class="history-empty">No conversations yet</div>
               </div>
             </div>
           </div>
@@ -559,8 +599,20 @@
                 <select id="graphRunSelect" class="select"></select>
               </label>
               <button class="btn btn-secondary btn-sm" id="refreshTopology">Refresh Topology</button>
+              <div class="zoom-controls">
+                <button class="btn btn-ghost btn-sm" id="zoomOut" title="Zoom out">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM8 11h6"/></svg>
+                </button>
+                <span class="zoom-level" id="zoomLevel">100%</span>
+                <button class="btn btn-ghost btn-sm" id="zoomIn" title="Zoom in">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM11 8v6M8 11h6"/></svg>
+                </button>
+                <button class="btn btn-ghost btn-sm" id="zoomReset" title="Reset zoom">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+                </button>
+              </div>
             </div>
-            <div class="topology-canvas-wrap">
+            <div class="topology-canvas-wrap" id="topologyCanvasWrap">
               <svg id="workflowGraphSvg" viewBox="0 0 1200 420"></svg>
             </div>
           </div>

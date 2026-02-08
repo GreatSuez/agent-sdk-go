@@ -42,12 +42,16 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	agentfw "github.com/PipeOpsHQ/agent-sdk-go/framework/agent"
 	devuiapi "github.com/PipeOpsHQ/agent-sdk-go/framework/devui/api"
-	_ "github.com/PipeOpsHQ/agent-sdk-go/framework/graphs/basic" // registers "basic" workflow
+	_ "github.com/PipeOpsHQ/agent-sdk-go/framework/graphs/basic"     // registers "basic" workflow
+	_ "github.com/PipeOpsHQ/agent-sdk-go/framework/graphs/chain"     // registers "chain" workflow
+	_ "github.com/PipeOpsHQ/agent-sdk-go/framework/graphs/mapreduce" // registers "map-reduce" workflow
+	_ "github.com/PipeOpsHQ/agent-sdk-go/framework/graphs/router"    // registers "router" workflow
 	authsqlite "github.com/PipeOpsHQ/agent-sdk-go/framework/devui/auth/sqlite"
 	catalogsqlite "github.com/PipeOpsHQ/agent-sdk-go/framework/devui/catalog/sqlite"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/flow"
@@ -160,12 +164,16 @@ func Start(ctx context.Context, opts ...Options) error {
 		defer func() { _ = closer.Close() }()
 	}
 
-	// Observer
+	// Observer — saves to DB and forwards to SSE stream for live UI updates.
+	// The SSE forwarder is late-bound because the server is created after the observer.
+	var sseForwarder sseForwardSink
 	observer := observe.Sink(observe.NoopSink{})
 	if traceStore != nil {
-		async := observe.NewAsyncSink(observe.SinkFunc(func(ctx context.Context, event observe.Event) error {
+		dbSink := observe.SinkFunc(func(ctx context.Context, event observe.Event) error {
 			return traceStore.SaveEvent(ctx, event)
-		}), 256)
+		})
+		combined := observe.NewMultiSink(dbSink, &sseForwarder)
+		async := observe.NewAsyncSink(combined, 256)
 		observer = async
 		defer async.Close()
 	}
@@ -212,7 +220,10 @@ func Start(ctx context.Context, opts ...Options) error {
 					log.Printf("inline worker stopped: %v", err)
 				}
 			}()
-			defer func() { _ = inlineWorker.Stop(context.Background()) }()
+			defer func() {
+				log.Println("  stopping inline worker...")
+				_ = inlineWorker.Stop(context.Background())
+			}()
 			log.Println("inline worker started (capacity=2)")
 		}
 	}
@@ -231,7 +242,10 @@ func Start(ctx context.Context, opts ...Options) error {
 		return resp.Output, nil
 	})
 	scheduler.Start()
-	defer scheduler.Stop()
+	defer func() {
+		log.Println("  stopping cron scheduler...")
+		scheduler.Stop()
+	}()
 
 	// Register cron_manager tool
 	_ = tools.RegisterTool("cron_manager",
@@ -256,12 +270,15 @@ func Start(ctx context.Context, opts ...Options) error {
 	})
 
 	log.Printf("DevUI listening on http://%s", o.Addr)
+	// Bind the SSE forwarder now that the server is ready.
+	sseForwarder.bind(server)
 	if o.Open {
 		openBrowser("http://" + o.Addr)
 	}
 	if err := server.ListenAndServe(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("devui server failed: %w", err)
 	}
+	log.Println("🧹 Cleaning up resources...")
 	return nil
 }
 
@@ -358,6 +375,24 @@ func (r *playgroundRunner) Run(ctx context.Context, req devuiapi.PlaygroundReque
 		agentfw.WithSystemPrompt(systemPrompt),
 		agentfw.WithMaxIterations(25),
 	}
+
+	// Session continuity — reuse session ID and load previous conversation.
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID != "" {
+		agentOpts = append(agentOpts, agentfw.WithSessionID(sessionID))
+		// Load previous messages from the most recent completed run in this session.
+		if r.store != nil {
+			prevRuns, _ := r.store.ListRuns(ctx, state.ListRunsQuery{
+				SessionID: sessionID,
+				Status:    "completed",
+				Limit:     1,
+			})
+			if len(prevRuns) > 0 && len(prevRuns[0].Messages) > 0 {
+				agentOpts = append(agentOpts, agentfw.WithConversationHistory(prevRuns[0].Messages))
+			}
+		}
+	}
+
 	if r.store != nil {
 		agentOpts = append(agentOpts, agentfw.WithStore(r.store))
 	}
@@ -544,4 +579,28 @@ func openBrowser(target string) {
 			return
 		}
 	}
+}
+
+// sseForwardSink is a late-bound sink that forwards observe events to the
+// DevUI SSE stream. It is safe to call Emit before bind() — events are
+// silently dropped until the server is ready.
+type sseForwardSink struct {
+	mu     sync.RWMutex
+	server *devuiapi.Server
+}
+
+func (s *sseForwardSink) bind(srv *devuiapi.Server) {
+	s.mu.Lock()
+	s.server = srv
+	s.mu.Unlock()
+}
+
+func (s *sseForwardSink) Emit(_ context.Context, event observe.Event) error {
+	s.mu.RLock()
+	srv := s.server
+	s.mu.RUnlock()
+	if srv != nil {
+		srv.Emit(event)
+	}
+	return nil
 }

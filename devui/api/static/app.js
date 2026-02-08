@@ -38,6 +38,7 @@ let recentActivity = [];
 let currentRunEvents = [];
 let currentRunAttempts = [];
 let selectedGraphWorkflow = '';
+let playgroundSessionId = ''; // tracks multi-turn conversation session
 
 // ===== Utilities =====
 function formatDate(dateStr) {
@@ -1068,15 +1069,16 @@ async function loadWorkflows() {
     container.querySelectorAll('.workflow-card[data-workflow]').forEach(card => {
       card.addEventListener('click', () => {
         const workflowName = card.getAttribute('data-workflow');
-        setPlaygroundWorkflow(workflowName);
+        // Highlight the selected card
+        container.querySelectorAll('.workflow-card').forEach(c => c.classList.remove('selected'));
+        card.classList.add('selected');
+        // Update the graph topology for this workflow (stay on workflows tab)
         selectedGraphWorkflow = workflowName;
         const graphSelect = document.getElementById('graphWorkflowSelect');
         if (graphSelect) {
           graphSelect.value = workflowName;
         }
         loadWorkflowTopology();
-        switchTab('playground');
-        document.getElementById('chatInput')?.focus();
       });
     });
   } catch (e) {
@@ -1428,6 +1430,8 @@ function initCommandBar() {
 
 // ===== Playground =====
 let currentInputMode = 'chat';
+let playgroundHistoryVisible = false;
+let _playgroundHistoryRuns = [];
 
 function setInputMode(mode) {
   const chatMode = document.getElementById('playgroundChatMode');
@@ -1512,20 +1516,29 @@ async function sendPlaygroundMessage() {
   appendChatMessage('user', prompt);
   input.value = '';
   sendBtn.disabled = true;
-  sendBtn.textContent = 'Running...';
+
+  const payload = {
+    input: prompt,
+    sessionId: playgroundSessionId || undefined,
+    flow: flowName || undefined,
+    workflow,
+    tools,
+    systemPrompt,
+  };
+
+  // Show streaming progress indicator
+  const progressEl = appendStreamingProgress();
 
   try {
-    const response = await api.post('/api/v1/playground/run', {
-      input: prompt,
-      flow: flowName || undefined,
-      workflow,
-      tools,
-      systemPrompt,
-    });
+    const response = await streamPlaygroundRun(payload, progressEl);
+    removeStreamingProgress(progressEl);
     const status = response?.status || 'completed';
     if (status !== 'completed') {
       appendChatMessage('assistant', response?.error || 'Playground run failed', `status=${status}`);
       return;
+    }
+    if (response?.sessionId) {
+      playgroundSessionId = response.sessionId;
     }
     const meta = [
       response?.provider ? `provider=${response.provider}` : '',
@@ -1533,7 +1546,9 @@ async function sendPlaygroundMessage() {
       response?.sessionId ? `session=${response.sessionId}` : '',
     ].filter(Boolean).join(' • ');
     appendChatMessage('assistant', response?.output || '(empty response)', meta);
+    if (playgroundHistoryVisible) loadPlaygroundHistory();
   } catch (e) {
+    removeStreamingProgress(progressEl);
     appendChatMessage('assistant', `Request failed: ${e.message || e}`);
   } finally {
     sendBtn.disabled = false;
@@ -1544,6 +1559,120 @@ async function sendPlaygroundMessage() {
     `;
     input.focus();
   }
+}
+
+function appendStreamingProgress() {
+  const messages = document.getElementById('chatMessages');
+  if (!messages) return null;
+  const el = document.createElement('div');
+  el.className = 'chat-bubble assistant streaming-progress';
+  el.innerHTML = `
+    <div class="chat-bubble-role">Agent</div>
+    <div class="streaming-steps"></div>
+    <div class="streaming-spinner">⏳ Processing...</div>
+  `;
+  messages.appendChild(el);
+  messages.scrollTop = messages.scrollHeight;
+  return el;
+}
+
+function removeStreamingProgress(el) {
+  if (el) el.remove();
+}
+
+function updateStreamingProgress(el, event) {
+  if (!el) return;
+  const steps = el.querySelector('.streaming-steps');
+  const spinner = el.querySelector('.streaming-spinner');
+  if (!steps) return;
+
+  const kind = event.kind || '';
+  const status = event.status || '';
+  const name = event.name || event.toolName || '';
+  let label = '';
+
+  if (kind === 'tool' && status === 'started') {
+    label = `🔧 Running tool: ${name}`;
+  } else if (kind === 'tool' && status === 'completed') {
+    label = `✅ Tool complete: ${name}`;
+  } else if (kind === 'tool' && status === 'failed') {
+    label = `❌ Tool failed: ${name}`;
+  } else if (kind === 'provider' && status === 'started') {
+    label = '🤖 Generating response...';
+  } else if (kind === 'provider' && status === 'completed') {
+    label = '✅ Generation complete';
+  } else if (kind === 'run' && status === 'started') {
+    label = '▶️ Run started';
+  } else if (kind === 'graph' && status === 'started') {
+    label = `📊 Step: ${name}`;
+  } else if (kind === 'graph' && status === 'completed') {
+    label = `✅ Step complete: ${name}`;
+  } else if (event.message) {
+    label = event.message;
+  }
+
+  if (label) {
+    const step = document.createElement('div');
+    step.className = 'streaming-step';
+    step.textContent = label;
+    steps.appendChild(step);
+  }
+  if (spinner) spinner.textContent = '⏳ Processing...';
+  const messages = document.getElementById('chatMessages');
+  if (messages) messages.scrollTop = messages.scrollHeight;
+}
+
+async function streamPlaygroundRun(payload, progressEl) {
+  const resp = await fetch('/api/v1/playground/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(payload),
+  });
+
+  if (!resp.ok) {
+    throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finalResponse = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // Parse SSE events from buffer
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    let eventType = '';
+    let dataLines = [];
+    for (const line of lines) {
+      if (line.startsWith('event: ')) {
+        eventType = line.slice(7).trim();
+      } else if (line.startsWith('data: ')) {
+        dataLines.push(line.slice(6));
+      } else if (line === '' && eventType && dataLines.length) {
+        try {
+          const data = JSON.parse(dataLines.join('\n'));
+          if (eventType === 'progress') {
+            updateStreamingProgress(progressEl, data);
+          } else if (eventType === 'complete') {
+            finalResponse = data;
+          }
+        } catch (_) {}
+        eventType = '';
+        dataLines = [];
+      }
+    }
+  }
+
+  if (!finalResponse) {
+    throw new Error('Stream ended without a completion event');
+  }
+  return finalResponse;
 }
 
 function initPlayground() {
@@ -1664,6 +1793,13 @@ function onFlowSelected() {
   const details = document.getElementById('playgroundConfigDetails');
   const name = select?.value || '';
 
+  // Reset conversation session when flow changes.
+  playgroundSessionId = '';
+  const chatMessages = document.getElementById('chatMessages');
+  if (chatMessages) {
+    chatMessages.innerHTML = '<div class="chat-welcome"><p>Send a message to begin a new conversation.</p></div>';
+  }
+
   if (!name) {
     if (flowInfo) flowInfo.style.display = 'none';
     if (badge) { badge.textContent = 'manual'; badge.className = 'config-badge'; }
@@ -1779,6 +1915,7 @@ async function sendJsonPayload() {
 
   const payload = {
     input: typeof parsed === 'string' ? parsed : (parsed.input || JSON.stringify(parsed)),
+    sessionId: playgroundSessionId || undefined,
     flow: flowName || undefined,
     workflow,
     tools,
@@ -1787,10 +1924,15 @@ async function sendJsonPayload() {
 
   try {
     const response = await api.post('/api/v1/playground/run', payload);
+    // Track session for multi-turn conversation continuity.
+    if (response?.sessionId) {
+      playgroundSessionId = response.sessionId;
+    }
     resultDiv && (resultDiv.style.display = 'block');
     if (resultContent) {
       resultContent.textContent = JSON.stringify(response, null, 2);
     }
+    if (playgroundHistoryVisible) loadPlaygroundHistory();
   } catch (e) {
     resultDiv && (resultDiv.style.display = 'block');
     if (resultContent) {
@@ -1903,6 +2045,171 @@ function drawGraphPreview(canvas, nodes, edges) {
     ctx.fillStyle = colors[n.kind] || '#6b7280';
     ctx.fillText(n.label || n.id, pos.x + nw / 2, pos.y + nh / 2);
   });
+}
+
+// ===== Playground History =====
+function togglePlaygroundHistory() {
+  playgroundHistoryVisible = !playgroundHistoryVisible;
+  const panel = document.getElementById('playgroundHistory');
+  const container = document.querySelector('.playground-container');
+  const btn = document.getElementById('toggleHistoryBtn');
+  if (panel) panel.style.display = playgroundHistoryVisible ? '' : 'none';
+  if (container) container.classList.toggle('with-history', playgroundHistoryVisible);
+  if (btn) btn.classList.toggle('active', playgroundHistoryVisible);
+  if (playgroundHistoryVisible) loadPlaygroundHistory();
+}
+
+async function loadPlaygroundHistory() {
+  const list = document.getElementById('historyList');
+  if (!list) return;
+  list.innerHTML = '<div class="history-empty">Loading...</div>';
+  try {
+    const runs = await api.get('/api/v1/runs?limit=50&offset=0');
+    if (!Array.isArray(runs) || runs.length === 0) {
+      list.innerHTML = '<div class="history-empty">No conversations yet</div>';
+      _playgroundHistoryRuns = [];
+      return;
+    }
+    // Group runs by session_id. Runs without session go individually.
+    const sessions = new Map();
+    const standalone = [];
+    for (const run of runs) {
+      const sid = run.sessionId || '';
+      if (sid) {
+        if (!sessions.has(sid)) sessions.set(sid, []);
+        sessions.get(sid).push(run);
+      } else {
+        standalone.push(run);
+      }
+    }
+
+    _playgroundHistoryRuns = runs;
+    list.innerHTML = '';
+
+    // Render session groups
+    for (const [sid, sessionRuns] of sessions) {
+      const latest = sessionRuns[0];
+      const count = sessionRuns.length;
+      const preview = latest.input || latest.output || '(no content)';
+      const time = formatRelativeTime(latest.createdAt);
+      const status = latest.status || 'completed';
+      const item = document.createElement('div');
+      item.className = 'history-item' + (sid === playgroundSessionId ? ' active' : '');
+      item.onclick = () => restoreSession(sid, sessionRuns);
+      item.innerHTML = `
+        <div class="history-item-title">${escapeHtml(truncate(preview, 60))}</div>
+        <div class="history-item-meta">
+          <span class="status-dot ${status}"></span>
+          <span>${count} message${count !== 1 ? 's' : ''}</span>
+          <span>•</span>
+          <span>${time}</span>
+        </div>
+      `;
+      list.appendChild(item);
+    }
+
+    // Render standalone runs
+    for (const run of standalone) {
+      const preview = run.input || run.output || '(no content)';
+      const time = formatRelativeTime(run.createdAt);
+      const status = run.status || 'completed';
+      const item = document.createElement('div');
+      item.className = 'history-item';
+      item.onclick = () => restoreSingleRun(run);
+      item.innerHTML = `
+        <div class="history-item-title">${escapeHtml(truncate(preview, 60))}</div>
+        <div class="history-item-meta">
+          <span class="status-dot ${status}"></span>
+          <span>1 message</span>
+          <span>•</span>
+          <span>${time}</span>
+        </div>
+      `;
+      list.appendChild(item);
+    }
+  } catch (e) {
+    list.innerHTML = `<div class="history-empty">Failed to load: ${escapeHtml(e.message || String(e))}</div>`;
+  }
+}
+
+async function restoreSession(sessionId, sessionRuns) {
+  // Mark active in UI
+  document.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
+  event?.target?.closest?.('.history-item')?.classList.add('active');
+
+  // Set session ID for continuity
+  playgroundSessionId = sessionId;
+
+  // Clear chat and show messages from this session
+  const messages = document.getElementById('chatMessages');
+  if (!messages) return;
+  messages.innerHTML = '';
+
+  // Load full run details for each run in the session (most recent first, reverse for chronological)
+  const orderedRuns = [...sessionRuns].reverse();
+  for (const run of orderedRuns) {
+    if (run.input) appendChatMessage('user', run.input);
+    if (run.output) {
+      const meta = [
+        run.provider ? `provider=${run.provider}` : '',
+        run.runId ? `run=${run.runId}` : '',
+      ].filter(Boolean).join(' • ');
+      appendChatMessage('assistant', run.output, meta);
+    }
+  }
+
+  // Switch to chat mode if in JSON mode
+  if (currentInputMode !== 'chat') setInputMode('chat');
+  document.getElementById('chatInput')?.focus();
+}
+
+function restoreSingleRun(run) {
+  document.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
+  event?.target?.closest?.('.history-item')?.classList.add('active');
+
+  playgroundSessionId = '';
+  const messages = document.getElementById('chatMessages');
+  if (!messages) return;
+  messages.innerHTML = '';
+
+  if (run.input) appendChatMessage('user', run.input);
+  if (run.output) {
+    const meta = [
+      run.provider ? `provider=${run.provider}` : '',
+      run.runId ? `run=${run.runId}` : '',
+    ].filter(Boolean).join(' • ');
+    appendChatMessage('assistant', run.output, meta);
+  }
+  if (currentInputMode !== 'chat') setInputMode('chat');
+  document.getElementById('chatInput')?.focus();
+}
+
+function startNewConversation() {
+  playgroundSessionId = '';
+  const messages = document.getElementById('chatMessages');
+  if (messages) {
+    messages.innerHTML = '<div class="chat-welcome"><p>Send a message to begin a new conversation.</p></div>';
+  }
+  // Deselect all history items
+  document.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
+  document.getElementById('chatInput')?.focus();
+}
+
+function truncate(str, len) {
+  if (!str) return '';
+  return str.length > len ? str.substring(0, len) + '…' : str;
+}
+
+function formatRelativeTime(dateStr) {
+  if (!dateStr) return '';
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diffSec = Math.floor((now - then) / 1000);
+  if (diffSec < 60) return 'just now';
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
+  if (diffSec < 604800) return `${Math.floor(diffSec / 86400)}d ago`;
+  return new Date(dateStr).toLocaleDateString();
 }
 
 // ===== Scheduler =====
@@ -2020,6 +2327,14 @@ function initButtons() {
   document.getElementById('refreshQueueEvents')?.addEventListener('click', loadQueueEvents);
   document.getElementById('refreshAudit')?.addEventListener('click', loadAuditLogs);
   document.getElementById('refreshTopology')?.addEventListener('click', loadWorkflowTopology);
+  document.getElementById('zoomIn')?.addEventListener('click', () => zoomTopology(0.2));
+  document.getElementById('zoomOut')?.addEventListener('click', () => zoomTopology(-0.2));
+  document.getElementById('zoomReset')?.addEventListener('click', () => { topologyZoom = 1; applyTopologyZoom(); });
+  // Mouse wheel zoom on topology canvas
+  document.getElementById('topologyCanvasWrap')?.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    zoomTopology(e.deltaY < 0 ? 0.1 : -0.1);
+  }, { passive: false });
   document.getElementById('graphWorkflowSelect')?.addEventListener('change', () => {
     selectedGraphWorkflow = document.getElementById('graphWorkflowSelect')?.value || '';
     loadWorkflowTopology();

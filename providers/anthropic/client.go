@@ -258,9 +258,54 @@ type anthropicContentBlock struct {
 	Text      string         `json:"text,omitempty"`
 	ID        string         `json:"id,omitempty"`
 	Name      string         `json:"name,omitempty"`
-	Input     map[string]any `json:"input,omitempty"`
+	Input     map[string]any `json:"-"` // custom marshal: required for tool_use, omitted otherwise
 	ToolUseID string         `json:"tool_use_id,omitempty"`
 	Content   any            `json:"content,omitempty"`
+}
+
+// MarshalJSON ensures the "input" field is always present for tool_use blocks
+// (Anthropic API requires it, even when empty), and omitted for other block types.
+func (b anthropicContentBlock) MarshalJSON() ([]byte, error) {
+	type alias anthropicContentBlock
+	raw, err := json.Marshal(alias(b))
+	if err != nil {
+		return nil, err
+	}
+	if b.Type != "tool_use" {
+		return raw, nil
+	}
+	// Inject "input" field into the JSON object.
+	inputVal := b.Input
+	if inputVal == nil {
+		inputVal = map[string]any{}
+	}
+	inputRaw, err := json.Marshal(inputVal)
+	if err != nil {
+		return nil, err
+	}
+	// Insert before the closing brace.
+	if len(raw) > 1 && raw[len(raw)-1] == '}' {
+		return append(raw[:len(raw)-1], []byte(`,"input":`+string(inputRaw)+"}")...), nil
+	}
+	return raw, nil
+}
+
+// UnmarshalJSON restores the Input field which is tagged json:"-".
+func (b *anthropicContentBlock) UnmarshalJSON(data []byte) error {
+	type alias anthropicContentBlock
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*b = anthropicContentBlock(a)
+	// Extract "input" manually since it's tagged json:"-".
+	var raw struct {
+		Input map[string]any `json:"input"`
+	}
+	if err := json.Unmarshal(data, &raw); err == nil {
+		b.Input = raw.Input
+	}
+	return nil
 }
 
 type anthropicTool struct {

@@ -90,6 +90,16 @@ func (w *worker) Start(ctx context.Context) error {
 	heartbeat := time.NewTicker(w.policy.HeartbeatInterval)
 	defer heartbeat.Stop()
 
+	pollTimer := time.NewTimer(w.policy.PollInterval)
+	defer pollTimer.Stop()
+	// Drain initial fire so first iteration uses Claim directly.
+	if !pollTimer.Stop() {
+		select {
+		case <-pollTimer.C:
+		default:
+		}
+	}
+
 	if err := w.attempts.SaveWorkerHeartbeat(runCtx, WorkerHeartbeat{
 		WorkerID:   w.cfg.WorkerID,
 		Status:     "online",
@@ -126,18 +136,20 @@ func (w *worker) Start(ctx context.Context) error {
 		default:
 			deliveries, err := w.queue.Claim(runCtx, w.cfg.WorkerID, w.policy.ClaimBlock, w.cfg.Capacity)
 			if err != nil {
+				pollTimer.Reset(w.policy.PollInterval)
 				select {
 				case <-runCtx.Done():
 					continue
-				case <-time.After(w.policy.PollInterval):
+				case <-pollTimer.C:
 				}
 				continue
 			}
 			if len(deliveries) == 0 {
+				pollTimer.Reset(w.policy.PollInterval)
 				select {
 				case <-runCtx.Done():
 					continue
-				case <-time.After(w.policy.PollInterval):
+				case <-pollTimer.C:
 				}
 				continue
 			}
