@@ -940,6 +940,27 @@ function syncGraphRunOptions(runRows) {
   select.innerHTML = options.join('');
 }
 
+let topologyZoom = 1;
+const ZOOM_MIN = 0.3;
+const ZOOM_MAX = 3;
+
+function zoomTopology(delta) {
+  topologyZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, topologyZoom + delta));
+  applyTopologyZoom();
+}
+
+function applyTopologyZoom() {
+  const svg = document.getElementById('workflowGraphSvg');
+  const label = document.getElementById('zoomLevel');
+  if (svg) {
+    const baseW = 1200, baseH = 420;
+    const w = baseW / topologyZoom, h = baseH / topologyZoom;
+    const ox = (baseW - w) / 2, oy = (baseH - h) / 2;
+    svg.setAttribute('viewBox', `${ox} ${oy} ${w} ${h}`);
+  }
+  if (label) label.textContent = `${Math.round(topologyZoom * 100)}%`;
+}
+
 async function loadWorkflowTopology() {
   const workflowSelect = document.getElementById('graphWorkflowSelect');
   const runSelect = document.getElementById('graphRunSelect');
@@ -948,6 +969,9 @@ async function loadWorkflowTopology() {
   const workflowName = workflowSelect.value || selectedGraphWorkflow || '';
   if (!workflowName) return;
   selectedGraphWorkflow = workflowName;
+  // Reset zoom when switching workflows
+  topologyZoom = 1;
+  applyTopologyZoom();
   const runID = runSelect?.value || '';
   try {
     const topology = await api.get(`/api/v1/workflows/${encodeURIComponent(workflowName)}/topology`).catch(() => ({ nodes: [], edges: [] }));

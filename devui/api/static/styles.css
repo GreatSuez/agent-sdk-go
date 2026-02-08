@@ -1418,6 +1418,12 @@ body {
   box-shadow: var(--shadow-lg);
 }
 
+.workflow-card.selected {
+  border-color: var(--primary);
+  background: var(--bg-tertiary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
 .workflow-card-header {
   display: flex;
   align-items: center;
