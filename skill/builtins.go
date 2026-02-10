@@ -328,8 +328,118 @@ Turn raw findings into concise documents and export polished PDF deliverables.
 - Explicit risks/unknowns and owners for next actions.
 - No sensitive secrets in report body.
 
+		## Boundaries
+		- Do not fabricate findings.
+		- Prefer concise, factual language over marketing tone.`,
+	},
+	{
+		Name:         "api-design-review",
+		Description:  "Review API contracts for consistency, backward compatibility, and operational clarity.",
+		AllowedTools: []string{"code_search", "file_system", "text_processor", "json_parser", "@code", "@text"},
+		Source:       "builtin",
+		Instructions: `# API Design Review
+
+## Overview
+Evaluate API design quality across naming, schema consistency, versioning strategy, and error modeling.
+
+## Workflow
+
+1. Inventory endpoints and classify by resource domain.
+2. Validate naming and HTTP semantics (verbs, nouns, idempotency, status codes).
+3. Check request/response schema consistency:
+   - predictable envelopes
+   - explicit required fields
+   - stable enums
+   - pagination/filter patterns
+4. Verify compatibility posture:
+   - identify breaking changes
+   - suggest migration-safe alternatives
+   - mark deprecation paths
+5. Evaluate operational signals:
+   - error shapes and codes
+   - rate-limit hints
+   - tracing/correlation fields
+
+## Output Pattern
+- **Critical Issues**
+- **Compatibility Risks**
+- **Consistency Gaps**
+- **Recommended Contract Changes**
+
 ## Boundaries
-- Do not fabricate findings.
-- Prefer concise, factual language over marketing tone.`,
+- Do not change API behavior without explicit approval.
+- Prioritize backward compatibility and clear migration paths.`,
+	},
+	{
+		Name:         "oncall-triage",
+		Description:  "Handle production incidents quickly with structured triage, stabilization, and handoff notes.",
+		AllowedTools: []string{"shell_command", "http_client", "file_system", "web_search", "todo_manager", "@system", "@network"},
+		Source:       "builtin",
+		Instructions: `# On-Call Triage
+
+## Overview
+Use a rapid triage loop to reduce impact first, then deepen investigation.
+
+## Workflow
+
+1. **Classify severity**
+   - user impact, blast radius, and time sensitivity
+2. **Stabilize service**
+   - safe mitigations (rollback, traffic shift, feature flag, restart)
+3. **Collect evidence**
+   - timestamps, logs, metrics, deploy identifiers, suspect dependencies
+4. **Narrow hypotheses**
+   - compare healthy vs failing paths and recent changes
+5. **Communicate status**
+   - concise updates: impact, mitigation, ETA, owner
+6. **Prepare handoff**
+   - summary of what changed, what remains, and next checks
+
+## Output Pattern
+- **Current Impact**
+- **Immediate Mitigation**
+- **Likely Root Causes**
+- **Next 3 Checks**
+- **Stakeholder Update Draft**
+
+## Boundaries
+- Avoid destructive actions without approval.
+- Preserve evidence required for postmortem analysis.`,
+	},
+	{
+		Name:         "release-readiness",
+		Description:  "Assess release risk using checks for tests, migrations, rollback, observability, and runbooks.",
+		AllowedTools: []string{"git_repo", "shell_command", "file_system", "text_processor", "json_parser", "@code", "@system"},
+		Source:       "builtin",
+		Instructions: `# Release Readiness
+
+## Overview
+Evaluate whether a change set is safe to deploy and recoverable under failure.
+
+## Checklist
+
+1. **Scope and change risk**
+   - identify critical paths and high-blast-radius components
+2. **Quality gates**
+   - tests, lint, build, integration checks, perf sanity
+3. **Data safety**
+   - migrations reversible? backfill plans? lock-duration concerns?
+4. **Operational readiness**
+   - dashboards, alerts, SLO guardrails, canary metrics
+5. **Rollback posture**
+   - explicit rollback command/path and rollback owner
+6. **Communication**
+   - release notes, risk statement, support plan
+
+## Output Pattern
+- **Go/No-Go Recommendation**
+- **Top Risks**
+- **Must-Fix Before Deploy**
+- **Rollback Plan**
+- **Post-Deploy Validation Steps**
+
+## Boundaries
+- Do not approve high-risk releases with unknown rollback.
+- Call out missing telemetry as a release blocker.`,
 	},
 }

@@ -2,12 +2,15 @@ package cron
 
 import "time"
 
+import "github.com/PipeOpsHQ/agent-sdk-go/framework/delivery"
+
 // JobConfig defines the configuration for a scheduled agent run.
 type JobConfig struct {
-	Workflow     string   `json:"workflow,omitempty"`
-	Tools        []string `json:"tools,omitempty"`
-	SystemPrompt string   `json:"systemPrompt,omitempty"`
-	Input        string   `json:"input"`
+	Workflow     string           `json:"workflow,omitempty"`
+	Tools        []string         `json:"tools,omitempty"`
+	SystemPrompt string           `json:"systemPrompt,omitempty"`
+	Input        string           `json:"input"`
+	ReplyTo      *delivery.Target `json:"replyTo,omitempty"`
 }
 
 // Job represents a scheduled recurring agent task.

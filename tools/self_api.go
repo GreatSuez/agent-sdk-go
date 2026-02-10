@@ -33,6 +33,10 @@ func NewSelfAPI(baseURL string) Tool {
 				"type": "string",
 				"description": `API path to call. Available endpoints include:
 - GET  /api/v1/flows              — List registered flows
+- POST /api/v1/flows              — Create or upsert a flow (body: {"flow":{...},"persist":true})
+- GET  /api/v1/flows/{name}       — Get a single flow definition
+- DELETE /api/v1/flows/{name}     — Delete a flow
+- POST /api/v1/flows/{name}/run   — Run a named flow (body: {"input":"..."})
 - GET  /api/v1/reflect            — Discover all actions (flows, tools, workflows, skills)
 - POST /api/v1/actions/run        — Run an action by key (e.g. {"key":"/flow/code-reviewer","input":{"input":"review this"}})
 - GET  /api/v1/runs               — List recent runs
@@ -41,14 +45,30 @@ func NewSelfAPI(baseURL string) Tool {
 - POST /api/v1/skills             — Install skill from GitHub (body: {"repoUrl":"owner/repo"})
 - DELETE /api/v1/skills/{name}    — Remove a skill
 - GET  /api/v1/cron/jobs          — List scheduled jobs
-- POST /api/v1/cron/jobs          — Create cron job (body: {"name","cronExpr","input",...})
+- POST /api/v1/cron/jobs          — Create cron job (body: {"name","cronExpr","config":{"input",...,"replyTo":{"channel","destination","threadId","userId"}}})
 - DELETE /api/v1/cron/jobs/{name} — Remove a cron job
 - POST /api/v1/cron/jobs/{name}/trigger — Trigger a cron job now
 - GET  /api/v1/tools/catalog      — List available tools
 - GET  /api/v1/tools/registry     — Tool registry with schemas
+- GET  /api/v1/tools/custom       — List runtime custom tools
+- POST /api/v1/tools/custom       — Create or upsert runtime custom HTTP tool
+- GET  /api/v1/tools/custom/{name} — Get runtime custom tool spec
+- DELETE /api/v1/tools/custom/{name} — Delete runtime custom tool
 - GET  /api/v1/workflows          — List workflow bindings
 - GET  /api/v1/workflows/registry — Workflow registry
 - POST /api/v1/playground/run     — Run playground (body: {"input","flow","workflow","tools",...})
+- POST /api/v1/playground/stream  — Stream a run over SSE
+- GET  /api/v1/prompts            — List prompt specs
+- POST /api/v1/prompts            — Create or update prompt spec
+- GET  /api/v1/prompts/{name@v}   — Get prompt by ref
+- DELETE /api/v1/prompts/{name@v} — Delete prompt by ref
+- POST /api/v1/prompts/render     — Render prompt with variables
+- POST /api/v1/prompts/validate   — Validate prompt template
+- GET  /api/v1/files/view         — View generated file
+- GET  /api/v1/files/download     — Download generated file
+- GET  /api/v1/settings/provider-env    — Get provider settings
+- PUT  /api/v1/settings/provider-env    — Save provider settings
+- GET  /api/v1/settings/provider-models — List provider models
 - GET  /api/v1/metrics/summary    — Get metrics summary
 - GET  /api/v1/runtime/workers    — List runtime workers
 - GET  /api/v1/runtime/queues     — List queues

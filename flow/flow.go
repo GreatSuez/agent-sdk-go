@@ -51,6 +51,27 @@ func MustRegister(f *Definition) {
 	}
 }
 
+// Upsert registers a flow definition or replaces an existing one with the same name.
+func Upsert(f *Definition) error {
+	if f == nil {
+		return fmt.Errorf("flow definition is nil")
+	}
+	if f.Name == "" {
+		return fmt.Errorf("flow name is required")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	flows[f.Name] = f
+	return nil
+}
+
+// MustUpsert upserts a flow and panics on error.
+func MustUpsert(f *Definition) {
+	if err := Upsert(f); err != nil {
+		panic(err)
+	}
+}
+
 // Get returns a flow definition by name.
 func Get(name string) (*Definition, bool) {
 	mu.RLock()
@@ -81,6 +102,17 @@ func All() []*Definition {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+// Delete removes a flow by name.
+func Delete(name string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	if _, ok := flows[name]; !ok {
+		return false
+	}
+	delete(flows, name)
+	return true
 }
 
 // Reset clears the registry. Intended for tests only.

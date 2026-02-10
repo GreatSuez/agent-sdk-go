@@ -34,12 +34,14 @@ package devui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,6 +49,7 @@ import (
 	"time"
 
 	agentfw "github.com/PipeOpsHQ/agent-sdk-go/framework/agent"
+	"github.com/PipeOpsHQ/agent-sdk-go/framework/delivery"
 	devuiapi "github.com/PipeOpsHQ/agent-sdk-go/framework/devui/api"
 	authsqlite "github.com/PipeOpsHQ/agent-sdk-go/framework/devui/auth/sqlite"
 	catalogsqlite "github.com/PipeOpsHQ/agent-sdk-go/framework/devui/catalog/sqlite"
@@ -101,6 +104,10 @@ type Options struct {
 	// DefaultFlow is the flow name to auto-select in the Playground UI.
 	// When set, the UI opens with this flow pre-selected instead of "(none)".
 	DefaultFlow string
+
+	// ToolSpecDir is where runtime custom tool specs are persisted.
+	// Default: "./.ai-agent/tools". Env: AGENT_UI_TOOL_DIR.
+	ToolSpecDir string
 }
 
 // Start launches the DevUI server with sensible defaults. It blocks until
@@ -122,6 +129,9 @@ func Start(ctx context.Context, opts ...Options) error {
 	skill.RegisterBuiltins()
 	if n := skill.ScanDefaults(); n > 0 {
 		log.Printf("📚 Loaded %d skill(s) from local directories", n)
+	}
+	if n := loadCustomToolSpecs(o.ToolSpecDir); n > 0 {
+		log.Printf("🧰 Loaded %d custom runtime tool(s)", n)
 	}
 
 	// State store
@@ -243,6 +253,7 @@ func Start(ctx context.Context, opts ...Options) error {
 			Workflow:     cfg.Workflow,
 			Tools:        cfg.Tools,
 			SystemPrompt: cfg.SystemPrompt,
+			ReplyTo:      cfg.ReplyTo,
 		})
 		if err != nil {
 			return "", err
@@ -281,6 +292,7 @@ func Start(ctx context.Context, opts ...Options) error {
 		Scheduler:        scheduler,
 		RequireAPIKey:    o.RequireAPIKey,
 		AllowLocalNoAuth: o.AllowLocalNoAuth,
+		ToolSpecDir:      o.ToolSpecDir,
 		DefaultFlow:      o.DefaultFlow,
 	})
 
@@ -338,6 +350,12 @@ func mergeOptions(opts []Options) Options {
 	if o.DBPath == "" {
 		o.DBPath = "./.ai-agent/devui.db"
 	}
+	if strings.TrimSpace(o.ToolSpecDir) == "" {
+		o.ToolSpecDir = strings.TrimSpace(os.Getenv("AGENT_UI_TOOL_DIR"))
+	}
+	if strings.TrimSpace(o.ToolSpecDir) == "" {
+		o.ToolSpecDir = "./.ai-agent/tools"
+	}
 	if !o.Open {
 		o.Open = parseBoolEnv("AGENT_UI_OPEN", false)
 	}
@@ -350,6 +368,47 @@ func mergeOptions(opts []Options) Options {
 	}
 
 	return o
+}
+
+func loadCustomToolSpecs(dir string) int {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return 0
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("custom tool specs unavailable: %v", err)
+		}
+		return 0
+	}
+	loaded := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(entry.Name()))
+		if !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			log.Printf("custom tool spec %s skipped: %v", path, readErr)
+			continue
+		}
+		var spec tools.CustomHTTPSpec
+		if unmarshalErr := json.Unmarshal(raw, &spec); unmarshalErr != nil {
+			log.Printf("custom tool spec %s skipped: %v", path, unmarshalErr)
+			continue
+		}
+		if regErr := tools.UpsertCustomHTTPTool(spec); regErr != nil {
+			log.Printf("custom tool spec %s registration failed: %v", path, regErr)
+			continue
+		}
+		loaded++
+	}
+	return loaded
 }
 
 // playgroundRunner executes agent flows for the playground.
@@ -390,11 +449,18 @@ func (r *playgroundRunner) Run(ctx context.Context, req devuiapi.PlaygroundReque
 	// Resolve skills — merge flow skills + request skills, then inject instructions + tools
 	allSkills := make(map[string]bool)
 	for _, s := range flowSkills {
-		allSkills[s] = true
+		s = strings.TrimSpace(s)
+		if s != "" {
+			allSkills[s] = true
+		}
 	}
 	for _, s := range req.Skills {
-		allSkills[s] = true
+		s = strings.TrimSpace(s)
+		if s != "" {
+			allSkills[s] = true
+		}
 	}
+	appliedSkills := sortedSkillNames(allSkills)
 	for skillName := range allSkills {
 		if s, ok := skill.Get(skillName); ok {
 			if s.Instructions != "" {
@@ -405,6 +471,11 @@ func (r *playgroundRunner) Run(ctx context.Context, req devuiapi.PlaygroundReque
 			}
 		}
 	}
+	req.ReplyTo = delivery.Normalize(req.ReplyTo)
+	if req.ReplyTo != nil {
+		systemPrompt = strings.TrimSpace(systemPrompt + "\n\n" + buildReplyChannelHint(req.ReplyTo))
+	}
+	runCtx := delivery.WithTarget(ctx, req.ReplyTo)
 
 	// Build agent
 	agentOpts := []agentfw.Option{
@@ -476,16 +547,18 @@ func (r *playgroundRunner) Run(ctx context.Context, req devuiapi.PlaygroundReque
 
 	// Direct run (no workflow graph)
 	if wfName == "" {
-		result, runErr := agent.RunDetailed(ctx, req.Input)
+		result, runErr := agent.RunDetailed(runCtx, req.Input)
 		if runErr != nil {
 			return devuiapi.PlaygroundResponse{}, runErr
 		}
 		return devuiapi.PlaygroundResponse{
-			Status:    "completed",
-			Output:    result.Output,
-			RunID:     result.RunID,
-			SessionID: result.SessionID,
-			Provider:  provider.Name(),
+			Status:        "completed",
+			Output:        result.Output,
+			RunID:         result.RunID,
+			SessionID:     result.SessionID,
+			Provider:      provider.Name(),
+			AppliedSkills: appliedSkills,
+			ReplyTo:       req.ReplyTo,
 		}, nil
 	}
 
@@ -494,20 +567,64 @@ func (r *playgroundRunner) Run(ctx context.Context, req devuiapi.PlaygroundReque
 	if err != nil {
 		return devuiapi.PlaygroundResponse{}, fmt.Errorf("executor create failed: %w", err)
 	}
-	result, runErr := exec.Run(ctx, req.Input)
+	result, runErr := exec.Run(runCtx, req.Input)
 	if runErr != nil {
 		return devuiapi.PlaygroundResponse{}, runErr
 	}
 	return devuiapi.PlaygroundResponse{
-		Status:    "completed",
-		Output:    result.Output,
-		RunID:     result.RunID,
-		SessionID: result.SessionID,
-		Provider:  provider.Name(),
+		Status:        "completed",
+		Output:        result.Output,
+		RunID:         result.RunID,
+		SessionID:     result.SessionID,
+		Provider:      provider.Name(),
+		AppliedSkills: appliedSkills,
+		ReplyTo:       req.ReplyTo,
 	}, nil
 }
 
+func buildReplyChannelHint(target *delivery.Target) string {
+	if target == nil {
+		return ""
+	}
+	parts := []string{}
+	if v := strings.TrimSpace(target.Channel); v != "" {
+		parts = append(parts, "channel="+v)
+	}
+	if v := strings.TrimSpace(target.Destination); v != "" {
+		parts = append(parts, "destination="+v)
+	}
+	if v := strings.TrimSpace(target.ThreadID); v != "" {
+		parts = append(parts, "threadId="+v)
+	}
+	if v := strings.TrimSpace(target.UserID); v != "" {
+		parts = append(parts, "userId="+v)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "Current reply channel context: " + strings.Join(parts, ", ") + ". If asked to schedule reminders for this same channel, set cron job config.replyTo to this channel context unless the user explicitly asks for another destination."
+}
+
+func sortedSkillNames(skills map[string]bool) []string {
+	if len(skills) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(skills))
+	for name := range skills {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func buildExecutor(agent *agentfw.Agent, store state.Store, observer observe.Sink, wfName string) (*graph.Executor, error) {
+	if alias, ok := workflowAlias(wfName); ok {
+		wfName = alias
+	}
 	builder, ok := workflow.Get(wfName)
 	if !ok {
 		return nil, fmt.Errorf("unknown workflow %q (available: %s)", wfName, strings.Join(workflow.Names(), ", "))
@@ -518,6 +635,16 @@ func buildExecutor(agent *agentfw.Agent, store state.Store, observer observe.Sin
 	}
 	exec.SetObserver(observer)
 	return exec, nil
+}
+
+func workflowAlias(name string) (string, bool) {
+	normalized := strings.TrimSpace(strings.ToLower(name))
+	switch normalized {
+	case "web-scrape-and-summarize", "web_scrape_and_summarize", "webscrapeandsummarize":
+		return "map-reduce", true
+	default:
+		return "", false
+	}
 }
 
 type runtimeComponents struct {

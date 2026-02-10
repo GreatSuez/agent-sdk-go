@@ -44,11 +44,19 @@
             </svg>
             <span>Runs</span>
           </button>
-          <button class="nav-item" data-tab="playground" title="Playground">
+          <button class="nav-item" data-tab="playground" title="Agent Studio">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polygon points="5,3 19,12 5,21"/>
             </svg>
-            <span>Playground</span>
+            <span>Agent Studio</span>
+          </button>
+          <button class="nav-item" data-tab="console" title="Quick Chat">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="18" height="14" rx="2"/>
+              <path d="M7 9h4M7 13h6"/>
+              <path d="M15 20h4"/>
+            </svg>
+            <span>Quick Chat</span>
           </button>
           <button class="nav-item" data-tab="actions" title="Actions">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -63,7 +71,7 @@
             </svg>
             <span>Prompts</span>
           </button>
-          <button class="nav-item" data-tab="workflows" title="Graphs">
+          <button class="nav-item" data-tab="workflows" title="Profiles & Pipelines">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="5" cy="12" r="2"/>
               <circle cx="12" cy="6" r="2"/>
@@ -71,7 +79,7 @@
               <circle cx="19" cy="12" r="2"/>
               <path d="M7 12h3M14 6h2.5a1 1 0 011 1v4M14 18h2.5a1 1 0 001-1v-4"/>
             </svg>
-            <span>Graphs</span>
+            <span>Profiles</span>
           </button>
           <button class="nav-item" data-tab="tools" title="Tools">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -112,8 +120,12 @@
         <div class="sidebar-footer">
           <button class="nav-item" data-tab="settings" title="Settings">
             <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="3"/>
-              <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+              <line x1="4" y1="6" x2="20" y2="6"/>
+              <line x1="4" y1="12" x2="20" y2="12"/>
+              <line x1="4" y1="18" x2="20" y2="18"/>
+              <circle cx="9" cy="6" r="2"/>
+              <circle cx="15" cy="12" r="2"/>
+              <circle cx="7" cy="18" r="2"/>
             </svg>
             <span>Settings</span>
           </button>
@@ -256,6 +268,7 @@
           <div class="page-header">
             <h1>Runs</h1>
             <div class="header-actions">
+              <button class="btn btn-ghost btn-sm active" id="toggleRunsLive" title="Toggle real-time updates">Live On</button>
               <button class="btn btn-secondary" id="refreshRuns">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
                   <path d="M23 4v6h-6M1 20v-6h6"/>
@@ -348,12 +361,12 @@
           </div>
         </section>
 
-        <!-- Playground Tab -->
+        <!-- Agent Studio Tab -->
         <section id="tab-playground" class="tab">
           <div class="page-header">
-            <h1>Playground</h1>
+            <h1>Agent Studio</h1>
             <div style="display:flex;align-items:center;gap:12px;">
-              <p class="page-subtitle" style="margin:0;">Select an agent flow and test it interactively</p>
+              <p class="page-subtitle" style="margin:0;">Select an agent profile and test it interactively</p>
               <button class="btn btn-ghost btn-sm" id="toggleHistoryBtn" onclick="togglePlaygroundHistory()" title="Toggle history panel">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
                   <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
@@ -363,16 +376,25 @@
             </div>
           </div>
 
-          <!-- Flow Picker Bar -->
+          <!-- Profile Picker Bar -->
           <div class="playground-flow-bar">
             <div class="flow-picker">
-              <label>Playbook</label>
+              <label>Agent Profile</label>
               <select id="playgroundFlow" class="select">
                 <option value="">(none - use quick setup below)</option>
               </select>
               <div style="display:flex;gap:8px;margin-top:8px;">
                 <button type="button" class="btn btn-ghost btn-sm" id="supportModeBtn">Support Mode</button>
                 <button type="button" class="btn btn-ghost btn-sm" id="resetModeBtn">Reset</button>
+              </div>
+              <div class="config-group" style="margin-top:10px;">
+                <label>Profile Skills</label>
+                <div style="display:flex;gap:6px;margin:-2px 0 8px;">
+                  <button type="button" class="btn btn-ghost btn-sm" id="selectAllProfileSkills">Select all</button>
+                  <button type="button" class="btn btn-ghost btn-sm" id="clearAllProfileSkills">Clear</button>
+                </div>
+                <select id="playgroundProfileSkills" class="select" multiple size="4"></select>
+                <small style="color:var(--text-muted);font-size:11px;">Skills chosen here apply directly to this profile run.</small>
               </div>
             </div>
             <div class="flow-info" id="playgroundFlowInfo" style="display:none;">
@@ -386,7 +408,7 @@
               <details class="config-details" id="playgroundConfigDetails">
                 <summary>Setup (optional) <span class="config-badge" id="configBadge">manual</span></summary>
                 <div class="config-group">
-                  <label>Execution Pattern</label>
+                  <label>Execution Pipeline</label>
                   <select id="playgroundWorkflow" class="select">
                     <option value="basic">basic - one pass</option>
                     <option value="chain">chain - think, plan, execute, summarize</option>
@@ -402,13 +424,8 @@
                 </div>
                 <div class="config-group">
                   <label>Skill Packs</label>
-                  <div style="display:flex;gap:6px;margin:-2px 0 8px;">
-                    <button type="button" class="btn btn-ghost btn-sm" id="selectAllSkills">Select all</button>
-                    <button type="button" class="btn btn-ghost btn-sm" id="clearAllSkills">Clear</button>
-                  </div>
-                  <select id="playgroundSkills" class="select" multiple size="4">
-                  </select>
-                  <small style="color:var(--text-muted);font-size:11px;">Adds domain behavior (research, docs, security, etc.).</small>
+                  <small style="color:var(--text-muted);font-size:11px;display:block;">Use <strong>Profile Skills</strong> above in Agent Profile for skill selection.</small>
+                  <select id="playgroundSkills" class="select" multiple size="4" style="display:none;"></select>
                 </div>
                 <div class="config-group">
                   <label>Safety Checks</label>
@@ -443,7 +460,7 @@
                 </div>
               </div>
               <div id="playgroundGraphPreview" class="config-group graph-preview" style="display:none;">
-                <label>Graph Topology</label>
+                <label>Pipeline Topology</label>
                 <canvas id="graphCanvas" width="600" height="200"></canvas>
               </div>
             </div>
@@ -457,7 +474,7 @@
                     </svg>
                   </div>
                   <h3>Start a conversation</h3>
-                  <p>Select an agent flow above, or configure manually, then type a message.</p>
+                  <p>Select an agent profile above, or configure manually, then type a message.</p>
                 </div>
               </div>
               <div class="chat-input-container">
@@ -520,6 +537,101 @@
           </div>
         </section>
 
+        <!-- Quick Chat Tab -->
+        <section id="tab-console" class="tab">
+          <div class="page-header">
+            <h1>Quick Chat</h1>
+            <p class="page-subtitle">Direct chat console for SDK-defined profiles with session memory.</p>
+            <div class="header-actions">
+              <button class="btn btn-ghost" id="toggleConsoleHistoryBtn" title="Toggle history">History</button>
+              <button class="btn btn-secondary" id="consoleResetBtn">New Session</button>
+            </div>
+          </div>
+
+          <div class="playground-container" id="consoleContainer">
+            <div class="playground-config">
+              <div class="config-group">
+                <label>Agent Profile</label>
+                <select id="consoleFlow" class="select">
+                  <option value="">(none)</option>
+                </select>
+              </div>
+              <div class="config-group">
+                <label>Pipeline</label>
+                <select id="consoleWorkflow" class="select">
+                  <option value="basic">basic</option>
+                </select>
+              </div>
+              <div class="config-group">
+                <label>Tools</label>
+                <select id="consoleTools" class="select" multiple size="6"></select>
+              </div>
+              <div class="config-group">
+                <label>Skills</label>
+                <select id="consoleSkills" class="select" multiple size="5"></select>
+                <div style="display:flex; gap:8px; margin-top:8px;">
+                  <button class="btn btn-secondary btn-sm" id="consoleSelectAllSkills" type="button">Select all</button>
+                  <button class="btn btn-secondary btn-sm" id="consoleClearAllSkills" type="button">Clear</button>
+                </div>
+              </div>
+              <div class="config-group">
+                <label>System Prompt (optional)</label>
+                <textarea id="consoleSystemPrompt" class="textarea" rows="4" placeholder="Optional system instructions"></textarea>
+              </div>
+            </div>
+
+            <div class="playground-chat">
+              <div class="chat-messages" id="consoleMessages">
+                <div class="chat-welcome">
+                  <div class="welcome-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="48" height="48">
+                      <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+                    </svg>
+                  </div>
+                  <h3>Console is ready</h3>
+                  <p>Pick a profile and send messages. Session and history are preserved during this tab session.</p>
+                </div>
+              </div>
+              <div class="chat-input-container">
+                <textarea id="consoleInput" class="chat-input" placeholder="Send a message..." rows="1"></textarea>
+                <button id="consoleSend" class="btn btn-primary btn-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
+                    <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="playground-history" id="consoleHistory" style="display:none;">
+              <div class="history-header">
+                <h3>Quick Chat History</h3>
+                <button class="btn btn-ghost btn-sm" id="closeConsoleHistory" title="Close">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <path d="M18 6L6 18M6 6l12 12"/>
+                  </svg>
+                </button>
+              </div>
+              <div class="history-actions">
+                <button class="btn btn-sm btn-primary" id="newConsoleConversationBtn" title="New conversation">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <path d="M12 5v14M5 12h14"/>
+                  </svg>
+                  New
+                </button>
+                <button class="btn btn-sm btn-ghost" id="refreshConsoleHistoryBtn" title="Refresh">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                    <path d="M1 4v6h6M23 20v-6h-6"/>
+                    <path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/>
+                  </svg>
+                </button>
+              </div>
+              <div class="history-list" id="consoleHistoryList">
+                <div class="history-empty">No conversations yet</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- Actions Tab (Genkit-style) -->
         <section id="tab-actions" class="tab">
           <div class="page-header">
@@ -537,9 +649,9 @@
                 <input id="actionsSearch" class="input" placeholder="Filter actions..." oninput="filterActions()" />
                 <div class="actions-type-filter" id="actionsTypeFilter">
                   <button class="toggle-btn active" data-type="all" onclick="filterActionsByType('all')">All</button>
-                  <button class="toggle-btn" data-type="flow" onclick="filterActionsByType('flow')">Flows</button>
+                  <button class="toggle-btn" data-type="flow" onclick="filterActionsByType('flow')">Profiles</button>
                   <button class="toggle-btn" data-type="tool" onclick="filterActionsByType('tool')">Tools</button>
-                  <button class="toggle-btn" data-type="workflow" onclick="filterActionsByType('workflow')">Workflows</button>
+                  <button class="toggle-btn" data-type="workflow" onclick="filterActionsByType('workflow')">Pipelines</button>
                 </div>
               </div>
               <div class="actions-list" id="actionsList">
@@ -554,7 +666,7 @@
                   <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
                 </svg>
                 <h3>Select an action</h3>
-                <p>Choose a tool or flow from the list to inspect its schema and run it.</p>
+                <p>Choose a tool or profile from the list to inspect its schema and run it.</p>
               </div>
 
               <div id="actionDetail" style="display:none;">
@@ -679,10 +791,10 @@
           </div>
         </section>
 
-        <!-- Workflows Tab -->
+        <!-- Profiles and Pipelines Tab -->
         <section id="tab-workflows" class="tab">
           <div class="page-header">
-            <h1>Workflows</h1>
+            <h1>Profiles & Pipelines</h1>
             <div class="header-actions">
               <button class="btn btn-primary" id="toggleWorkflowCreate" data-requires-role="operator">+ Create</button>
               <button class="btn btn-secondary" id="refreshWorkflows">
@@ -695,11 +807,31 @@
             </div>
           </div>
 
-          <div id="workflowCreateForm" class="card" style="display:none; margin-bottom:20px;">
-            <div class="card-header"><h3>Create Workflow</h3></div>
+          <div class="card" style="margin-bottom:20px;">
+            <div class="card-header"><h3>Run Named Profile</h3></div>
             <div class="card-body" style="padding:16px;">
               <div class="config-group">
-                <label>Workflow Name</label>
+                <label>Agent Profile</label>
+                <select id="namedFlowSelect" class="select"></select>
+              </div>
+              <div class="config-group">
+                <label>Input</label>
+                <textarea id="namedFlowInput" class="textarea" rows="3" placeholder="Run this profile against..." style="margin-top:6px;"></textarea>
+              </div>
+              <div style="display:flex;gap:8px;margin-top:8px;">
+                <button class="btn btn-primary" id="runNamedFlowBtn">Run Profile</button>
+                <button class="btn btn-secondary" id="refreshNamedFlows">Refresh Profiles</button>
+                <button class="btn btn-danger" id="deleteNamedFlowBtn" data-requires-role="operator">Delete Profile</button>
+              </div>
+              <pre id="namedFlowResult" class="json-output" style="margin-top:12px;max-height:240px;overflow:auto;">Select a profile and run it from here.</pre>
+            </div>
+          </div>
+
+          <div id="workflowCreateForm" class="card" style="display:none; margin-bottom:20px;">
+            <div class="card-header"><h3>Create Pipeline</h3></div>
+            <div class="card-body" style="padding:16px;">
+              <div class="config-group">
+                <label>Pipeline Name</label>
                 <input id="workflowCreateName" class="input" placeholder="incident-triage" />
               </div>
               <div class="config-group">
@@ -707,7 +839,7 @@
                 <input id="workflowCreateDescription" class="input" placeholder="Route and triage incoming incidents" />
               </div>
               <div class="config-group">
-                <label>Workflow Spec (JSON)</label>
+                <label>Pipeline Spec (JSON)</label>
                 <textarea id="workflowCreateSpec" class="textarea json-editor" rows="14" placeholder='{"start":"prepare","nodes":[],"edges":[]}'></textarea>
                 <small style="color:var(--text-muted);font-size:11px;">Supported node kinds: noop, set, template, agent, output, router_json_key</small>
               </div>
@@ -720,15 +852,15 @@
 
           <div class="workflows-grid" id="workflowsGrid">
             <div class="empty-state">
-              <p>Loading workflows...</p>
+              <p>Loading pipelines...</p>
             </div>
           </div>
           <div class="card topology-card">
             <div class="card-header">
-              <h3>Graph Topology</h3>
+              <h3>Pipeline Topology</h3>
             </div>
             <div class="topology-controls">
-              <label>Workflow
+              <label>Pipeline
                 <select id="graphWorkflowSelect" class="select"></select>
               </label>
               <label>Run Overlay
@@ -772,21 +904,71 @@
           <div class="tool-intel-grid">
             <div class="card">
               <div class="card-header">
-                <h3>Capability Heatmap</h3>
+                <h3>Runtime Custom Tools</h3>
               </div>
-              <div class="tool-heatmap" id="toolHeatmap">
-                <div class="empty-state">
-                  <p>Collecting tool intelligence...</p>
+              <div class="card-body" style="padding:14px 16px;">
+                <div class="config-group">
+                  <label>Tool Name</label>
+                  <input id="customToolName" class="input" placeholder="incident_webhook" />
+                </div>
+                <div class="config-group">
+                  <label>Description</label>
+                  <input id="customToolDescription" class="input" placeholder="Send payload to incident automation endpoint" />
+                </div>
+                <div class="config-group" style="display:grid;grid-template-columns:120px 1fr;gap:8px;">
+                  <div>
+                    <label>Method</label>
+                    <select id="customToolMethod" class="select">
+                      <option value="POST">POST</option>
+                      <option value="GET">GET</option>
+                      <option value="PUT">PUT</option>
+                      <option value="PATCH">PATCH</option>
+                      <option value="DELETE">DELETE</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label>URL</label>
+                    <input id="customToolURL" class="input" placeholder="https://api.example.com/agent/tool" />
+                  </div>
+                </div>
+                <div class="config-group">
+                  <label>Headers JSON (optional)</label>
+                  <textarea id="customToolHeaders" class="textarea" rows="2" placeholder='{"Authorization":"Bearer ..."}'></textarea>
+                </div>
+                <div class="config-group">
+                  <label>Input JSON Schema (optional)</label>
+                  <textarea id="customToolSchema" class="textarea" rows="3" placeholder='{"type":"object","properties":{"input":{"type":"string"}}}'></textarea>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;">
+                  <button class="btn btn-primary" id="createCustomToolBtn" data-requires-role="operator">Create Tool</button>
+                  <button class="btn btn-secondary" id="refreshCustomToolsBtn">Refresh</button>
+                </div>
+                <div id="customToolsList" style="margin-top:12px;max-height:200px;overflow:auto;"></div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header">
+                <h3>Capability Heatmap</h3>
+                <button class="btn btn-ghost btn-sm collapse-toggle" data-collapse-target="toolHeatmapBody" aria-expanded="true" type="button">Collapse</button>
+              </div>
+              <div class="collapsible-body" id="toolHeatmapBody">
+                <div class="tool-heatmap" id="toolHeatmap">
+                  <div class="empty-state">
+                    <p>Collecting tool intelligence...</p>
+                  </div>
                 </div>
               </div>
             </div>
             <div class="card">
               <div class="card-header">
                 <h3>Failure Hotspots</h3>
+                <button class="btn btn-ghost btn-sm collapse-toggle" data-collapse-target="toolHotspotsBody" aria-expanded="true" type="button">Collapse</button>
               </div>
-              <div class="tool-hotspots" id="toolHotspots">
-                <div class="empty-state">
-                  <p>No hotspots yet</p>
+              <div class="collapsible-body" id="toolHotspotsBody">
+                <div class="tool-hotspots" id="toolHotspots">
+                  <div class="empty-state">
+                    <p>No hotspots yet</p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -958,7 +1140,7 @@
                 <small style="color:var(--text-muted);font-size:11px;">Format: min hour day month weekday (e.g., "0 9 * * *" = daily at 9am)</small>
               </div>
               <div class="config-group">
-                <label>Workflow</label>
+                <label>Pipeline</label>
                 <select id="cronJobWorkflow" class="select">
                   <option value="">None (direct agent)</option>
                   <option value="basic">basic</option>
@@ -971,6 +1153,28 @@
               <div class="config-group">
                 <label>System Prompt (optional)</label>
                 <textarea id="cronJobSystemPrompt" class="textarea" rows="2" placeholder="Optional system prompt override..."></textarea>
+              </div>
+              <div class="config-group">
+                <label>Reply Channel (optional)</label>
+                <select id="cronReplyChannel" class="select">
+                  <option value="">(none)</option>
+                  <option value="devui">devui</option>
+                  <option value="api">api</option>
+                  <option value="slack">slack</option>
+                  <option value="telegram">telegram</option>
+                  <option value="webhook">webhook</option>
+                </select>
+              </div>
+              <div class="config-group">
+                <label>Reply Destination (optional)</label>
+                <input id="cronReplyDestination" class="input" placeholder="e.g. #support-alerts, -10012345, webhook id" />
+              </div>
+              <div class="config-group">
+                <label>Reply Thread/User (optional)</label>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                  <input id="cronReplyThread" class="input" placeholder="thread id" />
+                  <input id="cronReplyUser" class="input" placeholder="user id" />
+                </div>
               </div>
               <div style="display:flex;gap:8px;margin-top:12px;">
                 <button class="btn btn-primary" onclick="createCronJob()" id="createCronJobBtn" data-requires-role="operator">Create</button>

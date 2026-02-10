@@ -1,0 +1,248 @@
+{
+  "info": {
+    "name": "Framework DevUI APIs",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Core DevUI and control-plane APIs including auth, flows, workflows, playground, prompts, tools, files, scheduler, skills, and provider settings."
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:7070"
+    },
+    {
+      "key": "apiKey",
+      "value": ""
+    },
+    {
+      "key": "flowName",
+      "value": "support-engineer"
+    },
+    {
+      "key": "workflowName",
+      "value": "basic"
+    },
+    {
+      "key": "promptRef",
+      "value": "incident-triage@v1"
+    },
+    {
+      "key": "filePath",
+      "value": "./generated/example.md"
+    }
+  ],
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-API-Key",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{apiKey}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "Auth / Me",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/auth/me"
+      }
+    },
+    {
+      "name": "Flows - List",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/flows"
+      }
+    },
+    {
+      "name": "Flows - Upsert",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"flow\": {\n    \"name\": \"console-helper\",\n    \"description\": \"Simple persisted flow from Postman\",\n    \"workflow\": \"basic\",\n    \"tools\": [\"@default\"],\n    \"systemPrompt\": \"You are a helpful framework console assistant.\"\n  },\n  \"persist\": true\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/flows"
+      }
+    },
+    {
+      "name": "Flows - Get By Name",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/flows/{{flowName}}"
+      }
+    },
+    {
+      "name": "Flows - Run By Name",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"input\": \"Summarize the current system status in 3 bullets.\"\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/flows/{{flowName}}/run"
+      }
+    },
+    {
+      "name": "Flows - Delete",
+      "request": {
+        "method": "DELETE",
+        "url": "{{baseUrl}}/api/v1/flows/{{flowName}}"
+      }
+    },
+    {
+      "name": "Workflows - Registry",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/workflows/registry"
+      }
+    },
+    {
+      "name": "Workflows - Create",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"workflow-from-postman\",\n  \"description\": \"Example workflow creation\",\n  \"spec\": {\n    \"start\": \"prepare\",\n    \"nodes\": [\n      {\"id\":\"prepare\",\"kind\":\"template\",\"template\":\"Handle: {{input}}\",\"outputKey\":\"prompt\"},\n      {\"id\":\"agent\",\"kind\":\"agent\",\"inputFrom\":\"prompt\",\"outputKey\":\"answer\"},\n      {\"id\":\"final\",\"kind\":\"output\",\"from\":\"data.answer\"}\n    ],\n    \"edges\": [\n      {\"from\":\"prepare\",\"to\":\"agent\"},\n      {\"from\":\"agent\",\"to\":\"final\"}\n    ]\n  }\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/workflows/registry"
+      }
+    },
+    {
+      "name": "Playground - Run",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"input\": \"Diagnose why retries keep happening\",\n  \"flow\": \"{{flowName}}\",\n  \"workflow\": \"{{workflowName}}\"\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/playground/run"
+      }
+    },
+    {
+      "name": "Playground - Stream",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"input\": \"Stream this response\",\n  \"flow\": \"{{flowName}}\"\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/playground/stream"
+      }
+    },
+    {
+      "name": "Prompts - List",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/prompts"
+      }
+    },
+    {
+      "name": "Prompts - Render",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"incident-triage\",\n  \"version\": \"v1\",\n  \"system\": \"You are helping with {{service}} in {{env}}\",\n  \"input\": {\"service\":\"checkout\",\"env\":\"prod\"}\n}"
+        },
+        "url": "{{baseUrl}}/api/v1/prompts/render"
+      }
+    },
+    {
+      "name": "Tools - Catalog",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/tools/catalog"
+      }
+    },
+    {
+      "name": "Files - View",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/files/view?path={{filePath}}"
+      }
+    },
+    {
+      "name": "Files - Download",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/files/download?path={{filePath}}"
+      }
+    },
+    {
+      "name": "Cron - List Jobs",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/cron/jobs"
+      }
+    },
+    {
+      "name": "Skills - List",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/skills"
+      }
+    },
+    {
+      "name": "Provider Settings - Get",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/settings/provider-env"
+      }
+    },
+    {
+      "name": "Provider Models - List",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/settings/provider-models?provider=gemini"
+      }
+    }
+  ]
+}

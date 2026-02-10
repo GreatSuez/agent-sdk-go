@@ -65,7 +65,12 @@ func (s *Server) handleSkillsInstall(w http.ResponseWriter, r *http.Request) {
 
 	count, err := skill.InstallFromGitHub(req.RepoURL, destDir)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, fmt.Errorf("install failed: %w", err))
+		msg := strings.ToLower(err.Error())
+		status := http.StatusInternalServerError
+		if strings.Contains(msg, "invalid repo") || strings.Contains(msg, "unsupported repo host") || strings.Contains(msg, "no skills found") {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, fmt.Errorf("install failed: %w", err))
 		return
 	}
 

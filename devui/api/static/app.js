@@ -40,8 +40,17 @@ let currentRunAttempts = [];
 let selectedGraphWorkflow = '';
 let playgroundSessionId = ''; // tracks multi-turn conversation session
 let playgroundConversation = [];
+let consoleSessionId = '';
+let consoleConversation = [];
 let currentPrincipal = { role: 'viewer', keyId: '' };
+let runsLiveEnabled = true;
+let runsLiveTimer = null;
+let runsRefreshInFlight = false;
+let runsLastRefreshAt = 0;
+let sseRefreshDebounceTimer = null;
 const HIDDEN_CONVERSATIONS_KEY = 'playground_hidden_conversations';
+const HIDDEN_QUICK_CHAT_THREADS_KEY = 'quick_chat_hidden_threads';
+const QUICK_CHAT_THREAD_KEY = 'devui_quick_chat_thread';
 
 const DEFAULT_WORKFLOW_SPEC = {
   start: 'prepare',
@@ -131,6 +140,56 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+function setButtonLoading(button, label = 'Working...') {
+  if (!button) return () => {};
+  if (button.dataset.loading === '1') return () => {};
+  button.dataset.loading = '1';
+  button.dataset.originalHtml = button.innerHTML;
+  button.classList.add('loading');
+  button.disabled = true;
+  if (button.classList.contains('btn-icon')) {
+    button.innerHTML = '<span class="btn-spinner" aria-hidden="true"></span>';
+  } else {
+    button.innerHTML = `<span class="btn-loading-content"><span class="btn-spinner" aria-hidden="true"></span><span>${escapeHtml(label)}</span></span>`;
+  }
+  return () => {
+    button.classList.remove('loading');
+    button.disabled = false;
+    if (button.dataset.originalHtml !== undefined) {
+      button.innerHTML = button.dataset.originalHtml;
+    }
+    delete button.dataset.originalHtml;
+    delete button.dataset.loading;
+  };
+}
+
+function getOrCreateQuickChatThread() {
+  const existing = String(localStorage.getItem(QUICK_CHAT_THREAD_KEY) || '').trim();
+  if (existing) return existing;
+  const value = `quick-${Math.random().toString(36).slice(2, 10)}`;
+  localStorage.setItem(QUICK_CHAT_THREAD_KEY, value);
+  return value;
+}
+
+function rotateQuickChatThread() {
+  const value = `quick-${Math.random().toString(36).slice(2, 10)}`;
+  localStorage.setItem(QUICK_CHAT_THREAD_KEY, value);
+  return value;
+}
+
+function quickChatReplyTo() {
+  return {
+    channel: 'devui',
+    destination: 'quick-chat',
+    threadId: consoleSessionId || getOrCreateQuickChatThread(),
+    userId: String(currentPrincipal?.keyId || '').trim() || undefined,
+    metadata: {
+      tab: 'quick-chat',
+      ui: 'devui',
+    },
+  };
+}
+
 function runIdOf(run) {
   return run?.runId || run?.runID || '';
 }
@@ -212,7 +271,7 @@ function setTabScopedQuery(tab) {
   if (tab === 'tools') {
     params.toolsTab = queryParam('toolsTab') || 'builtin';
   }
-  if (tab === 'graphs') {
+  if (tab === 'workflows') {
     params.graphWorkflow = queryParam('graphWorkflow') || '';
     params.graphRun = queryParam('graphRun') || '';
   }
@@ -222,6 +281,9 @@ function setTabScopedQuery(tab) {
     params.pgPrompt = queryParam('pgPrompt') || '';
     params.pgHistory = queryParam('pgHistory') || '';
     params.pgPromptInput = queryParam('pgPromptInput') || '';
+  }
+  if (tab === 'console') {
+    params.qcHistory = queryParam('qcHistory') || '';
   }
   if (tab === 'actions') {
     params.action = queryParam('action') || '';
@@ -251,6 +313,73 @@ function switchTab(tab, opts = {}) {
   if (tab === 'actions') loadActions();
   if (tab === 'prompts') loadPrompts();
   if (tab === 'skills') loadSkills();
+  if (tab === 'workflows') {
+    loadWorkflows();
+    loadFlows();
+  }
+  if (tab === 'console') {
+    loadFlows();
+    loadWorkflows();
+    loadToolCatalog();
+    loadSkillsCatalog();
+    if (consoleHistoryVisible) loadConsoleHistory();
+  }
+  if (tab === 'runs') {
+    refreshRunsLive({ force: true });
+  }
+  updateRunsLivePolling();
+}
+
+function isRunsTabActive() {
+  return document.getElementById('tab-runs')?.classList.contains('active');
+}
+
+function refreshRunsLive(opts = {}) {
+  const force = opts.force === true;
+  if (runsRefreshInFlight) return;
+  const now = Date.now();
+  if (!force && now-runsLastRefreshAt < 1200) return;
+  runsRefreshInFlight = true;
+  runsLastRefreshAt = now;
+  loadRuns()
+    .then(() => {
+      if (!currentRun) return;
+      const selected = (runs || []).find((r) => runIdOf(r) === currentRun);
+      if (!selected) return;
+      const status = runStatusOf(selected);
+      if (force || status === 'running' || status === 'pending') {
+        return selectRun(currentRun);
+      }
+    })
+    .finally(() => {
+      runsRefreshInFlight = false;
+    });
+}
+
+function updateRunsLiveToggleButton() {
+  const btn = document.getElementById('toggleRunsLive');
+  if (!btn) return;
+  btn.classList.toggle('active', runsLiveEnabled);
+  btn.textContent = runsLiveEnabled ? 'Live On' : 'Live Off';
+}
+
+function updateRunsLivePolling() {
+  if (runsLiveTimer) {
+    clearInterval(runsLiveTimer);
+    runsLiveTimer = null;
+  }
+  if (!runsLiveEnabled || !isRunsTabActive()) return;
+  runsLiveTimer = setInterval(() => refreshRunsLive(), 5000);
+}
+
+function toggleRunsLive() {
+  runsLiveEnabled = !runsLiveEnabled;
+  localStorage.setItem('runs_live_enabled', runsLiveEnabled ? '1' : '0');
+  updateRunsLiveToggleButton();
+  updateRunsLivePolling();
+  if (runsLiveEnabled) {
+    refreshRunsLive({ force: true });
+  }
 }
 
 function switchRunTab(tab, opts = {}) {
@@ -975,8 +1104,98 @@ async function loadTools() {
     }
 
     await loadToolIntelligence();
+    await loadCustomTools();
   } catch (e) {
     console.error('Failed to load tools:', e);
+  }
+}
+
+function parseJSONInputField(id, fallback) {
+  const raw = String(document.getElementById(id)?.value || '').trim();
+  if (!raw) return fallback;
+  return JSON.parse(raw);
+}
+
+async function createCustomTool() {
+  if (!canRole('operator')) {
+    alert('Operator role required');
+    return;
+  }
+  const name = String(document.getElementById('customToolName')?.value || '').trim();
+  const description = String(document.getElementById('customToolDescription')?.value || '').trim();
+  const method = String(document.getElementById('customToolMethod')?.value || 'POST').trim();
+  const url = String(document.getElementById('customToolURL')?.value || '').trim();
+  if (!name || !url) {
+    alert('Tool name and URL are required');
+    return;
+  }
+  let headers = {};
+  let schema = { type: 'object', additionalProperties: true };
+  try {
+    headers = parseJSONInputField('customToolHeaders', {});
+    schema = parseJSONInputField('customToolSchema', schema);
+  } catch (e) {
+    alert('Headers/Schema must be valid JSON: ' + (e.message || e));
+    return;
+  }
+  const done = setButtonLoading(document.getElementById('createCustomToolBtn'), 'Creating...');
+  try {
+    await api.post('/api/v1/tools/custom', {
+      tool: { name, description, method, url, headers, jsonSchema: schema },
+      persist: true,
+    });
+    document.getElementById('customToolName').value = '';
+    document.getElementById('customToolDescription').value = '';
+    document.getElementById('customToolURL').value = '';
+    document.getElementById('customToolHeaders').value = '';
+    document.getElementById('customToolSchema').value = '';
+    await loadTools();
+  } catch (e) {
+    alert('Failed to create custom tool: ' + (e.message || e));
+  } finally {
+    done();
+  }
+}
+
+async function loadCustomTools() {
+  const list = document.getElementById('customToolsList');
+  if (!list) return;
+  try {
+    const res = await api.get('/api/v1/tools/custom');
+    const items = Array.isArray(res?.tools) ? res.tools : [];
+    if (!items.length) {
+      list.innerHTML = '<div class="empty-state"><p>No runtime custom tools.</p></div>';
+      return;
+    }
+    list.innerHTML = items.map((t) => `
+      <div class="tool-call-item" style="padding:8px;border-bottom:1px solid var(--border-light);">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+          <div>
+            <div style="font-weight:600;font-size:12px;">${escapeHtml(t.name)}</div>
+            <div style="font-size:11px;color:var(--text-muted);">${escapeHtml((t.method || 'POST') + ' ' + (t.url || ''))}</div>
+          </div>
+          ${canRole('operator') ? `<button class="btn btn-danger btn-sm" onclick="deleteCustomTool('${escapeHtml(t.name)}')">Delete</button>` : ''}
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {
+    list.innerHTML = `<div class="empty-state"><p>Failed to load custom tools: ${escapeHtml(e.message || String(e))}</p></div>`;
+  }
+}
+
+async function deleteCustomTool(name) {
+  const clean = String(name || '').trim();
+  if (!clean) return;
+  if (!canRole('operator')) {
+    alert('Operator role required');
+    return;
+  }
+  if (!confirm(`Delete custom tool "${clean}"?`)) return;
+  try {
+    await api.request(`/api/v1/tools/custom/${encodeURIComponent(clean)}`, { method: 'DELETE' });
+    await loadTools();
+  } catch (e) {
+    alert('Failed to delete custom tool: ' + (e.message || e));
   }
 }
 
@@ -996,21 +1215,25 @@ async function loadToolIntelligence() {
     const maxCalls = Math.max(...rows.map((r) => r.calls), 1);
 
     if (heatmap) {
-      heatmap.innerHTML = rows.slice(0, 12).map((row) => {
-        const intensity = Math.max(8, Math.round(((row.calls || 0) / maxCalls) * 100));
-        const avgDuration = Number(row.avgDurationMs || 0);
-        return `
-          <div class="heat-row">
-            <div class="heat-head">
-              <span class="heat-tool">${escapeHtml(row.name)}</span>
-              <span class="heat-stat">${row.calls || 0} calls • avg ${avgDuration}ms</span>
-            </div>
-            <div class="heat-bar">
-              <span class="heat-fill" style="width:${intensity}%"></span>
-            </div>
+      const topRows = rows.slice(0, 20);
+      const topList = rows.slice(0, 6).map((row) => `
+        <div class="tool-heatmap-top-item">
+          <span>${escapeHtml(row.name)}</span>
+          <span>${row.calls || 0} calls</span>
+        </div>
+      `).join('');
+      heatmap.innerHTML = `
+        <div class="tool-heatmap-3d">
+          <div class="tool-heatmap-terrain" id="toolHeatmapTerrain"></div>
+          <div class="tool-heatmap-legend">
+            <span>Activity</span>
+            <span>Capability terrain (calls + latency)</span>
+            <span>Reliability</span>
           </div>
-        `;
-      }).join('');
+          <div class="tool-heatmap-top">${topList}</div>
+        </div>
+      `;
+      renderToolHeatmapTerrain(topRows, maxCalls);
     }
 
     if (hotspots) {
@@ -1033,6 +1256,53 @@ async function loadToolIntelligence() {
     if (heatmap) heatmap.innerHTML = '<div class="empty-state"><p>Tool intelligence unavailable.</p></div>';
     if (hotspots) hotspots.innerHTML = '<div class="empty-state"><p>Hotspot analysis unavailable.</p></div>';
   }
+}
+
+function renderToolHeatmapTerrain(rows, maxCalls) {
+  const root = document.getElementById('toolHeatmapTerrain');
+  if (!root) return;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    root.innerHTML = '<div class="empty-state"><p>No tool activity yet.</p></div>';
+    return;
+  }
+  root.innerHTML = rows.map((row) => {
+    const calls = Number(row.calls || 0);
+    const failures = Number(row.failures || 0);
+    const failureRate = calls > 0 ? failures / calls : 0;
+    const avgDuration = Number(row.avgDurationMs || 0);
+    const callScore = calls / Math.max(1, maxCalls);
+    const latencyScore = Math.min(1, avgDuration / 1400);
+    const activity = Math.max(8, Math.round((callScore * 0.7 + latencyScore * 0.3) * 100));
+    const reliability = Math.max(0, Math.round((1 - failureRate) * 100));
+    return `
+      <div class="terrain-row">
+        <div class="terrain-labels">
+          <span class="terrain-name">${escapeHtml(row.name)}</span>
+          <span class="terrain-meta">${calls} calls • avg ${Math.round(avgDuration)}ms • ${failures} failures</span>
+        </div>
+        <div class="terrain-track">
+          <span class="terrain-bar" style="width:${activity}%"></span>
+          <span class="terrain-reliability" style="left:${reliability}%"></span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function initCollapsibleCards() {
+  document.querySelectorAll('.collapse-toggle[data-collapse-target]').forEach((btn) => {
+    if (btn.dataset.wired === '1') return;
+    btn.dataset.wired = '1';
+    btn.addEventListener('click', () => {
+      const targetId = btn.getAttribute('data-collapse-target');
+      if (!targetId) return;
+      const body = document.getElementById(targetId);
+      if (!body) return;
+      const collapsed = body.classList.toggle('collapsed');
+      btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      btn.textContent = collapsed ? 'Expand' : 'Collapse';
+    });
+  });
 }
 
 // ===== Workflows =====
@@ -1253,7 +1523,7 @@ async function loadWorkflows() {
     const registryRows = Array.isArray(registry?.workflows) ? registry.workflows : [];
     const workflowMap = new Map();
     const descriptions = {
-      basic: 'Simple agent workflow',
+      basic: 'Simple agent pipeline',
     };
 
     registryRows.forEach(item => {
@@ -1261,7 +1531,7 @@ async function loadWorkflows() {
       if (!name) return;
       workflowMap.set(name, {
         name,
-        description: descriptions[name] || 'Registered workflow',
+          description: descriptions[name] || 'Registered pipeline',
         binding: null,
       });
     });
@@ -1270,7 +1540,7 @@ async function loadWorkflows() {
       if (!name) return;
       const row = workflowMap.get(name) || {
         name,
-        description: descriptions[name] || 'Configured workflow',
+        description: descriptions[name] || 'Configured pipeline',
         binding: null,
       };
       row.binding = item;
@@ -1280,10 +1550,11 @@ async function loadWorkflows() {
     const allWorkflows = Array.from(workflowMap.values()).sort((a, b) => a.name.localeCompare(b.name));
     syncPlaygroundWorkflowOptions(allWorkflows.map(w => w.name));
     syncGraphWorkflowOptions(allWorkflows.map(w => w.name));
+    syncConsoleWorkflowOptions(allWorkflows.map(w => w.name));
     await loadWorkflowTopology();
 
     if (allWorkflows.length === 0) {
-      container.innerHTML = '<div class="empty-state"><p>No workflows configured</p></div>';
+      container.innerHTML = '<div class="empty-state"><p>No pipelines configured</p></div>';
       return;
     }
 
@@ -1316,7 +1587,28 @@ async function loadWorkflows() {
       });
     });
   } catch (e) {
-    container.innerHTML = '<div class="empty-state"><p>Failed to load workflows</p></div>';
+    container.innerHTML = '<div class="empty-state"><p>Failed to load pipelines</p></div>';
+  }
+}
+
+function syncConsoleWorkflowOptions(workflowNames) {
+  const select = document.getElementById('consoleWorkflow');
+  if (!select) return;
+  const names = Array.from(new Set((workflowNames || []).filter(Boolean)));
+  const previous = String(select.value || '').trim();
+  select.innerHTML = '';
+  if (!names.length) {
+    select.innerHTML = '<option value="basic">basic</option>';
+    return;
+  }
+  names.forEach((name) => {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name;
+    select.appendChild(option);
+  });
+  if (previous && names.includes(previous)) {
+    select.value = previous;
   }
 }
 
@@ -1347,7 +1639,7 @@ async function createWorkflowFromUI() {
   const name = String(nameInput.value || '').trim();
   const description = String(descriptionInput?.value || '').trim();
   if (!name) {
-    alert('Workflow name is required');
+    alert('Pipeline name is required');
     return;
   }
 
@@ -1355,10 +1647,11 @@ async function createWorkflowFromUI() {
   try {
     spec = JSON.parse(specInput.value || '{}');
   } catch (e) {
-    alert('Invalid workflow JSON: ' + (e.message || e));
+    alert('Invalid pipeline JSON: ' + (e.message || e));
     return;
   }
 
+  const done = setButtonLoading(document.getElementById('createWorkflowBtn'), 'Creating...');
   try {
     await api.post('/api/v1/workflows/registry', {
       name,
@@ -1366,13 +1659,15 @@ async function createWorkflowFromUI() {
       persist: true,
       spec,
     });
-    alert(`Workflow ${name} created`);
+    alert(`Pipeline ${name} created`);
     nameInput.value = '';
     if (descriptionInput) descriptionInput.value = '';
     toggleWorkflowCreateForm(false);
     await loadWorkflows();
   } catch (e) {
-    alert('Failed to create workflow: ' + (e.message || e));
+    alert('Failed to create pipeline: ' + (e.message || e));
+  } finally {
+    done();
   }
 }
 
@@ -1777,14 +2072,19 @@ function runControlCommand(raw) {
     switchTab('tools');
     return 'Opened Tools Hub.';
   }
-  if (value.includes('open graph') || value.includes('workflow')) {
+  if (value.includes('open graph') || value.includes('open flow') || value.includes('open profile') || value.includes('workflow') || value.includes('pipeline')) {
     switchTab('workflows');
-    return 'Opened Graph Topology.';
+    return 'Opened Pipeline Topology.';
   }
-  if (value.includes('open playground') || value.includes('test prompt')) {
+  if (value.includes('open playground') || value.includes('open studio') || value.includes('agent studio') || value.includes('test prompt')) {
     switchTab('playground');
     document.getElementById('chatInput')?.focus();
-    return 'Opened Playground.';
+    return 'Opened Agent Studio.';
+  }
+  if (value.includes('open console') || value.includes('console ground') || value.includes('quick chat')) {
+    switchTab('console');
+    document.getElementById('consoleInput')?.focus();
+    return 'Opened Quick Chat.';
   }
   if (value.includes('open live') || value === 'live' || value.includes('mission')) {
     switchTab('live');
@@ -1837,6 +2137,7 @@ function initCommandBar() {
 let currentInputMode = 'chat';
 let playgroundHistoryVisible = false;
 let _playgroundHistoryRuns = [];
+let consoleHistoryVisible = false;
 
 function setInputMode(mode) {
   const chatMode = document.getElementById('playgroundChatMode');
@@ -1914,6 +2215,19 @@ function appendChatMessage(role, content, meta, extrasHtml = '') {
       playgroundConversation = playgroundConversation.slice(playgroundConversation.length - 24);
     }
   }
+}
+
+function skillsChipsHTML(skills) {
+  const items = Array.isArray(skills)
+    ? skills.map((s) => String(s || '').trim()).filter(Boolean)
+    : [];
+  if (!items.length) return '';
+  return `
+    <div class="chat-artifacts chat-skills">
+      <div class="chat-artifacts-title">Applied Skills</div>
+      <div class="chat-skills-list">${items.map((s) => `<span class="chat-skill-chip">${escapeHtml(s)}</span>`).join('')}</div>
+    </div>
+  `;
 }
 
 function extractDocumentArtifacts(value) {
@@ -2131,14 +2445,14 @@ async function sendPlaygroundMessage() {
   const promptRef = document.getElementById('playgroundPromptRef')?.value || '';
   const workflow = document.getElementById('playgroundWorkflow')?.value || '';
   const tools = Array.from(document.getElementById('playgroundTools')?.selectedOptions || []).map(o => o.value);
-  const skills = Array.from(document.getElementById('playgroundSkills')?.selectedOptions || []).map(o => o.value);
+  const skills = selectedPlaygroundSkills();
   const guardrails = Array.from(document.getElementById('playgroundGuardrails')?.selectedOptions || []).map(o => o.value);
   const systemPrompt = document.getElementById('playgroundSystemPrompt')?.value?.trim() || '';
 
   appendChatMessage('user', prompt);
   input.value = '';
   input.style.height = 'auto';
-  sendBtn.disabled = true;
+  const done = setButtonLoading(sendBtn, 'Thinking...');
 
   const payload = {
     input: prompt,
@@ -2162,7 +2476,7 @@ async function sendPlaygroundMessage() {
     removeStreamingProgress(progressEl);
     const status = response?.status || 'completed';
     if (status !== 'completed') {
-      appendChatMessage('assistant', response?.error || 'Playground run failed', `status=${status}`);
+      appendChatMessage('assistant', response?.error || 'Agent Studio run failed', `status=${status}`);
       return;
     }
     if (response?.sessionId) {
@@ -2174,24 +2488,24 @@ async function sendPlaygroundMessage() {
       response?.sessionId ? `session=${response.sessionId}` : '',
     ].filter(Boolean).join(' • ');
     const artifacts = extractDocumentArtifacts(response);
-    appendChatMessage('assistant', response?.output || '(empty response)', meta, artifactActionsHTML(artifacts));
+    const selectedSkills = selectedPlaygroundSkills();
+    const appliedSkills = Array.isArray(response?.appliedSkills) && response.appliedSkills.length
+      ? response.appliedSkills
+      : selectedSkills;
+    const extras = skillsChipsHTML(appliedSkills) + artifactActionsHTML(artifacts);
+    appendChatMessage('assistant', response?.output || '(empty response)', meta, extras);
     if (playgroundHistoryVisible) loadPlaygroundHistory();
   } catch (e) {
     removeStreamingProgress(progressEl);
     appendChatMessage('assistant', `Request failed: ${e.message || e}`);
   } finally {
-    sendBtn.disabled = false;
-    sendBtn.innerHTML = `
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20">
-        <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
-      </svg>
-    `;
+    done();
     input.focus();
   }
 }
 
-function appendStreamingProgress() {
-  const messages = document.getElementById('chatMessages');
+function appendStreamingProgress(containerId = 'chatMessages') {
+  const messages = document.getElementById(containerId);
   if (!messages) return null;
   const el = document.createElement('div');
   el.className = 'chat-bubble assistant streaming-progress';
@@ -2199,7 +2513,7 @@ function appendStreamingProgress() {
     <div class="chat-bubble-role">Agent</div>
     <div class="streaming-output"></div>
     <div class="streaming-steps"></div>
-    <div class="streaming-spinner">⏳ Processing...</div>
+    <div class="streaming-spinner">Agent is thinking...</div>
   `;
   messages.appendChild(el);
   messages.scrollTop = messages.scrollHeight;
@@ -2209,7 +2523,9 @@ function appendStreamingProgress() {
 function appendStreamingDelta(el, text) {
   if (!el) return;
   const out = el.querySelector('.streaming-output');
+  const spinner = el.querySelector('.streaming-spinner');
   if (!out) return;
+  if (spinner) spinner.textContent = 'Agent is typing...';
   out.textContent = (out.textContent || '') + String(text || '');
 }
 
@@ -2254,9 +2570,34 @@ function updateStreamingProgress(el, event) {
     step.textContent = label;
     steps.appendChild(step);
   }
-  if (spinner) spinner.textContent = '⏳ Processing...';
-  const messages = document.getElementById('chatMessages');
+  if (spinner && kind === 'provider' && status === 'started') {
+    spinner.textContent = 'Agent is thinking...';
+  }
+  const messages = el.parentElement;
   if (messages) messages.scrollTop = messages.scrollHeight;
+}
+
+function appendThinkingBubble(containerId, label = 'Agent is thinking...') {
+  const messages = document.getElementById(containerId);
+  if (!messages) return null;
+  const el = document.createElement('div');
+  el.className = 'chat-bubble assistant chat-thinking';
+  el.innerHTML = `
+    <div class="chat-bubble-role">Agent</div>
+    <div class="chat-bubble-content">
+      ${escapeHtml(label)}
+      <span class="thinking-dot"></span>
+      <span class="thinking-dot"></span>
+      <span class="thinking-dot"></span>
+    </div>
+  `;
+  messages.appendChild(el);
+  messages.scrollTop = messages.scrollHeight;
+  return el;
+}
+
+function removeThinkingBubble(el) {
+  if (el) el.remove();
 }
 
 async function streamPlaygroundRun(payload, progressEl) {
@@ -2326,6 +2667,59 @@ function setAllOptions(selectEl, selected) {
   });
 }
 
+function selectedValues(selectEl) {
+  if (!selectEl) return [];
+  return Array.from(selectEl.selectedOptions || []).map((o) => o.value).filter(Boolean);
+}
+
+function syncPlaygroundProfileSkillsOptions() {
+  const source = document.getElementById('playgroundSkills');
+  const target = document.getElementById('playgroundProfileSkills');
+  if (!source || !target) return;
+
+  const selected = new Set([
+    ...selectedValues(source),
+    ...selectedValues(target),
+  ]);
+  target.innerHTML = '';
+  Array.from(source.options || []).forEach((opt) => {
+    if (opt.disabled || !opt.value) return;
+    const clone = document.createElement('option');
+    clone.value = opt.value;
+    clone.textContent = opt.textContent;
+    clone.title = opt.title || '';
+    clone.selected = selected.has(opt.value);
+    target.appendChild(clone);
+  });
+}
+
+function syncPlaygroundSkillsFromProfile() {
+  const source = document.getElementById('playgroundProfileSkills');
+  const target = document.getElementById('playgroundSkills');
+  if (!source || !target) return;
+  const selected = new Set(selectedValues(source));
+  Array.from(target.options || []).forEach((opt) => {
+    opt.selected = selected.has(opt.value);
+  });
+}
+
+function syncPlaygroundProfileFromSkills() {
+  const source = document.getElementById('playgroundSkills');
+  const target = document.getElementById('playgroundProfileSkills');
+  if (!source || !target) return;
+  const selected = new Set(selectedValues(source));
+  Array.from(target.options || []).forEach((opt) => {
+    opt.selected = selected.has(opt.value);
+  });
+}
+
+function selectedPlaygroundSkills() {
+  const profileSelect = document.getElementById('playgroundProfileSkills');
+  const fromProfile = selectedValues(profileSelect);
+  if (fromProfile.length > 0) return fromProfile;
+  return selectedValues(document.getElementById('playgroundSkills'));
+}
+
 function selectValues(selectEl, values) {
   if (!selectEl) return;
   const set = new Set(values || []);
@@ -2364,6 +2758,7 @@ function applySupportMode() {
 
   const skillValues = ['document-manager', 'research-planner', 'pdf-reporting'];
   selectValues(skills, skillValues.filter((v) => [...(skills?.options || [])].some((o) => o.value === v)));
+  syncPlaygroundProfileFromSkills();
 
   const guardrailValues = ['prompt_injection', 'pii_filter', 'secret_guard', 'content_filter'];
   selectValues(guardrails, guardrailValues.filter((v) => [...(guardrails?.options || [])].some((o) => o.value === v)));
@@ -2387,6 +2782,7 @@ function resetSupportMode() {
   if (systemPrompt) systemPrompt.value = '';
   selectDefaultPlaygroundTools();
   setAllOptions(document.getElementById('playgroundSkills'), false);
+  syncPlaygroundProfileFromSkills();
   setAllOptions(document.getElementById('playgroundGuardrails'), false);
   setQueryParam('pgPrompt', '');
   setQueryParam('pgPromptInput', '');
@@ -2437,13 +2833,157 @@ function initPlayground() {
   loadPromptsCatalog();
 
   const skillsSelect = document.getElementById('playgroundSkills');
+  const profileSkillsSelect = document.getElementById('playgroundProfileSkills');
   const guardrailsSelect = document.getElementById('playgroundGuardrails');
-  document.getElementById('selectAllSkills')?.addEventListener('click', () => setAllOptions(skillsSelect, true));
-  document.getElementById('clearAllSkills')?.addEventListener('click', () => setAllOptions(skillsSelect, false));
+  document.getElementById('selectAllSkills')?.addEventListener('click', () => { setAllOptions(skillsSelect, true); syncPlaygroundProfileFromSkills(); });
+  document.getElementById('clearAllSkills')?.addEventListener('click', () => { setAllOptions(skillsSelect, false); syncPlaygroundProfileFromSkills(); });
+  document.getElementById('selectAllProfileSkills')?.addEventListener('click', () => { setAllOptions(profileSkillsSelect, true); syncPlaygroundSkillsFromProfile(); });
+  document.getElementById('clearAllProfileSkills')?.addEventListener('click', () => { setAllOptions(profileSkillsSelect, false); syncPlaygroundSkillsFromProfile(); });
+  skillsSelect?.addEventListener('change', syncPlaygroundProfileFromSkills);
+  profileSkillsSelect?.addEventListener('change', syncPlaygroundSkillsFromProfile);
   document.getElementById('selectAllGuardrails')?.addEventListener('click', () => setAllOptions(guardrailsSelect, true));
   document.getElementById('clearAllGuardrails')?.addEventListener('click', () => setAllOptions(guardrailsSelect, false));
   document.getElementById('supportModeBtn')?.addEventListener('click', applySupportMode);
   document.getElementById('resetModeBtn')?.addEventListener('click', resetSupportMode);
+}
+
+function initConsoleGround() {
+  const sendBtn = document.getElementById('consoleSend');
+  const input = document.getElementById('consoleInput');
+  const resetBtn = document.getElementById('consoleResetBtn');
+  const flowSelect = document.getElementById('consoleFlow');
+  const skillsSelect = document.getElementById('consoleSkills');
+  const toggleHistoryBtn = document.getElementById('toggleConsoleHistoryBtn');
+  sendBtn?.addEventListener('click', sendConsoleMessage);
+  flowSelect?.addEventListener('change', applyConsoleFlowDefaults);
+  document.getElementById('consoleSelectAllSkills')?.addEventListener('click', () => setAllOptions(skillsSelect, true));
+  document.getElementById('consoleClearAllSkills')?.addEventListener('click', () => setAllOptions(skillsSelect, false));
+  toggleHistoryBtn?.addEventListener('click', toggleConsoleHistory);
+  document.getElementById('closeConsoleHistory')?.addEventListener('click', toggleConsoleHistory);
+  document.getElementById('newConsoleConversationBtn')?.addEventListener('click', startNewConsoleConversation);
+  document.getElementById('refreshConsoleHistoryBtn')?.addEventListener('click', loadConsoleHistory);
+  input?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendConsoleMessage();
+    }
+  });
+  input?.addEventListener('input', () => autoResizeTextarea(input));
+  resetBtn?.addEventListener('click', resetConsoleSession);
+}
+
+function consoleConversationPayload() {
+  return consoleConversation
+    .filter((m) => (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim())
+    .map((m) => ({ role: m.role, content: String(m.content || '') }));
+}
+
+function appendConsoleMessage(role, content, meta = '', extrasHtml = '') {
+  const messages = document.getElementById('consoleMessages');
+  if (!messages) return;
+  const welcome = messages.querySelector('.chat-welcome');
+  if (welcome) welcome.remove();
+  const roleClass = role === 'user' ? 'user' : 'assistant';
+  const safeContent = role === 'assistant'
+    ? formatAssistantContent(content || '')
+    : escapeHtml(content || '').replace(/\n/g, '<br/>');
+  const item = document.createElement('div');
+  item.className = `chat-bubble ${roleClass}`;
+  item.innerHTML = `
+    <div class="chat-bubble-role">${role === 'user' ? 'You' : 'Agent'}</div>
+    <div class="chat-bubble-content">${safeContent}</div>
+    ${extrasHtml || ''}
+    ${meta ? `<div class="chat-bubble-meta">${escapeHtml(meta)}</div>` : ''}
+  `;
+  messages.appendChild(item);
+  messages.scrollTop = messages.scrollHeight;
+  if (role === 'user' || role === 'assistant') {
+    consoleConversation.push({ role, content: String(content || '') });
+    if (consoleConversation.length > 24) {
+      consoleConversation = consoleConversation.slice(consoleConversation.length - 24);
+    }
+  }
+}
+
+function resetConsoleSession() {
+  consoleSessionId = '';
+  consoleConversation = [];
+  rotateQuickChatThread();
+  const messages = document.getElementById('consoleMessages');
+  if (messages) {
+    messages.innerHTML = `
+      <div class="chat-welcome">
+        <div class="welcome-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="48" height="48">
+            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+          </svg>
+        </div>
+        <h3>New session started</h3>
+        <p>Console memory cleared for this tab.</p>
+      </div>
+    `;
+  }
+  document.querySelectorAll('#consoleHistoryList .history-item').forEach((el) => el.classList.remove('active'));
+}
+
+async function sendConsoleMessage() {
+  const input = document.getElementById('consoleInput');
+  const sendBtn = document.getElementById('consoleSend');
+  if (!input || !sendBtn) return;
+  const prompt = String(input.value || '').trim();
+  if (!prompt) return;
+
+  const flow = String(document.getElementById('consoleFlow')?.value || '').trim();
+  const workflow = String(document.getElementById('consoleWorkflow')?.value || '').trim();
+  const tools = Array.from(document.getElementById('consoleTools')?.selectedOptions || []).map((o) => o.value);
+  const skills = Array.from(document.getElementById('consoleSkills')?.selectedOptions || []).map((o) => o.value);
+  const systemPrompt = String(document.getElementById('consoleSystemPrompt')?.value || '').trim();
+
+  appendConsoleMessage('user', prompt);
+  input.value = '';
+  input.style.height = 'auto';
+  const done = setButtonLoading(sendBtn, 'Thinking...');
+  const progressEl = appendStreamingProgress('consoleMessages');
+
+  try {
+    const response = await streamPlaygroundRun({
+      input: prompt,
+      sessionId: consoleSessionId || undefined,
+      history: consoleConversationPayload(),
+      flow: flow || undefined,
+      workflow: workflow || undefined,
+      tools,
+      skills,
+      systemPrompt: systemPrompt || undefined,
+      replyTo: quickChatReplyTo(),
+    });
+    removeStreamingProgress(progressEl);
+    if (response?.sessionId) {
+      consoleSessionId = response.sessionId;
+    }
+    const meta = [
+      response?.provider ? `provider=${response.provider}` : '',
+      response?.runId ? `run=${response.runId}` : '',
+      response?.sessionId ? `session=${response.sessionId}` : '',
+      response?.status ? `status=${response.status}` : '',
+    ].filter(Boolean).join(' • ');
+    if (response?.status && response.status !== 'completed') {
+      removeStreamingProgress(progressEl);
+      appendConsoleMessage('assistant', response?.error || 'Console run failed', meta);
+      return;
+    }
+    const appliedSkills = Array.isArray(response?.appliedSkills) && response.appliedSkills.length
+      ? response.appliedSkills
+      : skills;
+    appendConsoleMessage('assistant', response?.output || '(empty response)', meta, skillsChipsHTML(appliedSkills));
+    if (consoleHistoryVisible) loadConsoleHistory();
+  } catch (e) {
+    removeStreamingProgress(progressEl);
+    appendConsoleMessage('assistant', `Request failed: ${e.message || e}`);
+  } finally {
+    done();
+    input.focus();
+  }
 }
 
 let _loadedFlows = [];
@@ -2476,8 +3016,136 @@ async function loadFlows() {
     } else if (defaultFlow && flows.some(f => f.name === defaultFlow)) {
       onFlowSelected();
     }
+    loadNamedFlowOptions(flows);
+    syncConsoleFlowOptions(flows, defaultFlow);
   } catch (e) {
     // Flows endpoint not available — that's OK
+    loadNamedFlowOptions([]);
+    syncConsoleFlowOptions([], '');
+  }
+}
+
+function syncConsoleFlowOptions(flows, defaultFlow = '') {
+  const select = document.getElementById('consoleFlow');
+  if (!select) return;
+  const rows = Array.isArray(flows) ? flows : [];
+  const previous = String(select.value || '').trim();
+  select.innerHTML = '<option value="">(none)</option>';
+  rows.forEach((f) => {
+    const option = document.createElement('option');
+    option.value = f.name;
+    option.textContent = f.name;
+    select.appendChild(option);
+  });
+  if (previous && rows.some((f) => f.name === previous)) {
+    select.value = previous;
+    return;
+  }
+  if (defaultFlow && rows.some((f) => f.name === defaultFlow)) {
+    select.value = defaultFlow;
+  }
+  applyConsoleFlowDefaults();
+}
+
+function applyConsoleFlowDefaults() {
+  const flowName = String(document.getElementById('consoleFlow')?.value || '').trim();
+  const selected = _loadedFlows.find((f) => f.name === flowName);
+  if (!selected) return;
+
+  const workflowSelect = document.getElementById('consoleWorkflow');
+  if (workflowSelect && selected.workflow) {
+    if ([...workflowSelect.options].some((o) => o.value === selected.workflow)) {
+      workflowSelect.value = selected.workflow;
+    }
+  }
+
+  const toolsSelect = document.getElementById('consoleTools');
+  if (toolsSelect && Array.isArray(selected.tools) && selected.tools.length) {
+    const desired = new Set(selected.tools);
+    [...toolsSelect.options].forEach((opt) => {
+      opt.selected = desired.has(opt.value);
+    });
+  }
+
+  const skillsSelect = document.getElementById('consoleSkills');
+  if (skillsSelect && Array.isArray(selected.skills)) {
+    const desiredSkills = new Set(selected.skills);
+    [...skillsSelect.options].forEach((opt) => {
+      opt.selected = desiredSkills.has(opt.value);
+    });
+  }
+
+  const prompt = document.getElementById('consoleSystemPrompt');
+  if (prompt && !String(prompt.value || '').trim() && selected.systemPrompt) {
+    prompt.value = selected.systemPrompt;
+  }
+}
+
+function loadNamedFlowOptions(flows) {
+  const select = document.getElementById('namedFlowSelect');
+  if (!select) return;
+  const rows = Array.isArray(flows) ? flows : [];
+  if (!rows.length) {
+    select.innerHTML = '<option value="">(no profiles available)</option>';
+    return;
+  }
+  const previous = select.value;
+  select.innerHTML = rows.map((f) => `<option value="${escapeHtml(f.name)}">${escapeHtml(f.name)}</option>`).join('');
+  if (previous && rows.some((f) => f.name === previous)) {
+    select.value = previous;
+  }
+}
+
+async function runNamedFlowFromUI() {
+  const select = document.getElementById('namedFlowSelect');
+  const input = document.getElementById('namedFlowInput');
+  const output = document.getElementById('namedFlowResult');
+  if (!select || !input || !output) return;
+  const name = String(select.value || '').trim();
+  const value = String(input.value || '').trim();
+  if (!name) {
+    output.textContent = 'Select an agent profile first.';
+    return;
+  }
+  if (!value) {
+    output.textContent = 'Input is required.';
+    return;
+  }
+  output.textContent = `Running profile ${name}...`;
+  const done = setButtonLoading(document.getElementById('runNamedFlowBtn'), 'Running...');
+  try {
+    const resp = await api.post(`/api/v1/flows/${encodeURIComponent(name)}/run`, { input: value });
+    output.textContent = JSON.stringify(resp, null, 2);
+  } catch (e) {
+    output.textContent = `Failed to run profile: ${e.message || e}`;
+  } finally {
+    done();
+  }
+}
+
+async function deleteNamedFlowFromUI() {
+  if (!canRole('operator')) {
+    alert('Operator role required');
+    return;
+  }
+  const select = document.getElementById('namedFlowSelect');
+  const output = document.getElementById('namedFlowResult');
+  if (!select || !output) return;
+  const name = String(select.value || '').trim();
+  if (!name) {
+    output.textContent = 'Select an agent profile to delete.';
+    return;
+  }
+  if (!confirm(`Delete profile "${name}"?`)) return;
+  const done = setButtonLoading(document.getElementById('deleteNamedFlowBtn'), 'Deleting...');
+  try {
+    await api.request(`/api/v1/flows/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    output.textContent = `Deleted profile ${name}.`;
+    await loadFlows();
+  } catch (e) {
+    output.textContent = `Failed to delete profile: ${e.message || e}`;
+  } finally {
+    done();
   }
 }
 
@@ -2523,10 +3191,47 @@ async function loadToolCatalog() {
     if (!bundles.length && !tools.length) {
       select.innerHTML = '<option value="@default" selected>@default</option><option value="@all">@all</option>';
     }
+    syncConsoleToolsOptions();
   } catch (e) {
     // Fallback to hardcoded defaults
     select.innerHTML = '<option value="@default" selected>@default</option><option value="@all">@all</option>';
+    syncConsoleToolsOptions();
   }
+}
+
+function syncConsoleToolsOptions() {
+  const source = document.getElementById('playgroundTools');
+  const target = document.getElementById('consoleTools');
+  if (!source || !target) return;
+  target.innerHTML = '';
+  const options = Array.from(source.options || []);
+  options.forEach((opt) => {
+    const clone = document.createElement('option');
+    clone.value = opt.value;
+    clone.textContent = opt.textContent;
+    clone.selected = opt.value === '@default';
+    target.appendChild(clone);
+  });
+  if (target.options.length === 0) {
+    target.innerHTML = '<option value="@default" selected>@default</option><option value="@all">@all</option>';
+  }
+}
+
+function syncConsoleSkillsOptions() {
+  const source = document.getElementById('playgroundSkills');
+  const target = document.getElementById('consoleSkills');
+  if (!source || !target) return;
+  target.innerHTML = '';
+  const options = Array.from(source.options || []);
+  options.forEach((opt) => {
+    if (opt.disabled || !opt.value) return;
+    const clone = document.createElement('option');
+    clone.value = opt.value;
+    clone.textContent = opt.textContent;
+    clone.title = opt.title || '';
+    target.appendChild(clone);
+  });
+  applyConsoleFlowDefaults();
 }
 
 function selectDefaultPlaygroundTools() {
@@ -2556,6 +3261,7 @@ async function loadSkillsCatalog() {
     select.innerHTML = '';
     if (!skills.length) {
       select.innerHTML = '<option disabled>No skills available</option>';
+      syncPlaygroundProfileSkillsOptions();
       return;
     }
     skills.forEach(sk => {
@@ -2565,8 +3271,12 @@ async function loadSkillsCatalog() {
       opt.title = sk.description || '';
       select.appendChild(opt);
     });
+    syncPlaygroundProfileSkillsOptions();
+    syncConsoleSkillsOptions();
   } catch (e) {
     select.innerHTML = '<option disabled>Failed to load skills</option>';
+    syncPlaygroundProfileSkillsOptions();
+    syncConsoleSkillsOptions();
   }
 }
 
@@ -2626,7 +3336,7 @@ function onFlowSelected() {
   const name = select?.value || '';
   setQueryParam('pgFlow', name || '');
 
-  // Reset conversation session when flow changes.
+  // Reset conversation session when profile changes.
   playgroundSessionId = '';
   playgroundConversation = [];
   const chatMessages = document.getElementById('chatMessages');
@@ -2643,6 +3353,8 @@ function onFlowSelected() {
     selectDefaultPlaygroundTools();
     const ss = document.getElementById('playgroundSkills');
     if (ss) [...ss.options].forEach(o => { o.selected = false; });
+    const ps = document.getElementById('playgroundProfileSkills');
+    if (ps) [...ps.options].forEach(o => { o.selected = false; });
     const ci = document.getElementById('chatInput');
     if (ci) ci.placeholder = 'Send a message...';
     return;
@@ -2651,12 +3363,12 @@ function onFlowSelected() {
   const f = _loadedFlows.find(fl => fl.name === name);
   if (!f) return;
 
-  // Show flow info bar
+  // Show profile info bar
   if (flowInfo) flowInfo.style.display = 'block';
   if (flowDesc) flowDesc.textContent = f.description || '';
   if (flowMeta) {
     const tags = [];
-    if (f.workflow) tags.push(`<span class="meta-tag">workflow: ${escapeHtml(f.workflow || 'basic')}</span>`);
+    if (f.workflow) tags.push(`<span class="meta-tag">pipeline: ${escapeHtml(f.workflow || 'basic')}</span>`);
     if (f.tools?.length) tags.push(`<span class="meta-tag">tools: ${f.tools.map(t => escapeHtml(t)).join(', ')}</span>`);
     if (f.skills?.length) tags.push(`<span class="meta-tag">skills: ${f.skills.map(s => escapeHtml(s)).join(', ')}</span>`);
     flowMeta.innerHTML = tags.join('');
@@ -2668,7 +3380,7 @@ function onFlowSelected() {
     badge.className = 'config-badge flow-active';
   }
 
-  // Collapse config details since flow handles it
+  // Collapse config details since profile handles it
   if (details) details.removeAttribute('open');
 
   // Pre-fill config from flow defaults
@@ -2712,6 +3424,7 @@ function onFlowSelected() {
     const flowSkills = f.skills || [];
     [...ss.options].forEach(o => { o.selected = flowSkills.includes(o.value); });
   }
+  syncPlaygroundProfileFromSkills();
 
   // If flow has an input example, populate it and update placeholder
   if (f.inputExample) {
@@ -2775,14 +3488,13 @@ async function sendJsonPayload() {
     return;
   }
 
-  sendBtn.disabled = true;
-  sendBtn.textContent = 'Running...';
+  const done = setButtonLoading(sendBtn, 'Running...');
 
   const flowName = document.getElementById('playgroundFlow')?.value || '';
   const promptRef = document.getElementById('playgroundPromptRef')?.value || '';
   const workflow = document.getElementById('playgroundWorkflow')?.value || '';
   const tools = Array.from(document.getElementById('playgroundTools')?.selectedOptions || []).map(o => o.value);
-  const skills = Array.from(document.getElementById('playgroundSkills')?.selectedOptions || []).map(o => o.value);
+  const skills = selectedPlaygroundSkills();
   const guardrails = Array.from(document.getElementById('playgroundGuardrails')?.selectedOptions || []).map(o => o.value);
   const systemPrompt = document.getElementById('playgroundSystemPrompt')?.value?.trim() || '';
 
@@ -2826,8 +3538,7 @@ async function sendJsonPayload() {
       resultArtifacts.innerHTML = '';
     }
   } finally {
-    sendBtn.disabled = false;
-    sendBtn.textContent = 'Execute';
+    done();
   }
 }
 
@@ -2959,6 +3670,26 @@ function getHiddenConversations() {
 
 function saveHiddenConversations(set) {
   localStorage.setItem(HIDDEN_CONVERSATIONS_KEY, JSON.stringify(Array.from(set)));
+}
+
+function getHiddenQuickChatThreads() {
+  try {
+    const raw = localStorage.getItem(HIDDEN_QUICK_CHAT_THREADS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch (_) {
+    return new Set();
+  }
+}
+
+function saveHiddenQuickChatThreads(set) {
+  localStorage.setItem(HIDDEN_QUICK_CHAT_THREADS_KEY, JSON.stringify(Array.from(set)));
+}
+
+function hideQuickChatThread(id) {
+  const hidden = getHiddenQuickChatThreads();
+  hidden.add(id);
+  saveHiddenQuickChatThreads(hidden);
 }
 
 function hideConversationHistory(id) {
@@ -3139,6 +3870,131 @@ function startNewConversation() {
   document.getElementById('chatInput')?.focus();
 }
 
+function toggleConsoleHistory() {
+  consoleHistoryVisible = !consoleHistoryVisible;
+  const panel = document.getElementById('consoleHistory');
+  const container = document.getElementById('consoleContainer');
+  const btn = document.getElementById('toggleConsoleHistoryBtn');
+  if (panel) panel.style.display = consoleHistoryVisible ? '' : 'none';
+  if (container) container.classList.toggle('with-history', consoleHistoryVisible);
+  if (btn) btn.classList.toggle('active', consoleHistoryVisible);
+  if (consoleHistoryVisible) loadConsoleHistory();
+  setQueryParam('qcHistory', consoleHistoryVisible ? '1' : '');
+}
+
+async function loadConsoleHistory() {
+  const list = document.getElementById('consoleHistoryList');
+  if (!list) return;
+  list.innerHTML = '<div class="history-empty">Loading...</div>';
+  try {
+    const runs = await api.get('/api/v1/runs?limit=120&offset=0');
+    if (!Array.isArray(runs) || runs.length === 0) {
+      list.innerHTML = '<div class="history-empty">No conversations yet</div>';
+      return;
+    }
+
+    const hidden = getHiddenQuickChatThreads();
+
+    const sessions = new Map();
+    for (const run of runs) {
+      if (!runBelongsToQuickChat(run)) continue;
+      const sid = String(run.sessionId || '').trim();
+      if (!sid) continue;
+      if (hidden.has(`session:${sid}`)) continue;
+      if (!sessions.has(sid)) sessions.set(sid, []);
+      sessions.get(sid).push(run);
+    }
+
+    if (sessions.size === 0) {
+      list.innerHTML = '<div class="history-empty">No resumable sessions yet</div>';
+      return;
+    }
+
+    list.innerHTML = '';
+    for (const [sid, sessionRuns] of sessions) {
+      const latestVisible = sessionRuns.find((r) => !isAutoContinueInput(r.input || '')) || sessionRuns[0];
+      const latest = latestVisible;
+      const userTurns = sessionRuns.filter((r) => !isAutoContinueInput(r.input || '')).length;
+      const count = Math.max(userTurns, 1);
+      const preview = latest.input || latest.output || '(no content)';
+      const time = formatRelativeTime(latest.createdAt);
+      const status = latest.status || 'completed';
+      const item = document.createElement('div');
+      item.className = 'history-item' + (sid === consoleSessionId ? ' active' : '');
+      item.onclick = () => restoreConsoleSession(sid, sessionRuns, item);
+      item.innerHTML = `
+        <div class="history-item-title">${escapeHtml(truncate(preview, 60))}</div>
+        <div class="history-item-meta">
+          <span class="status-dot ${status}"></span>
+          <span>${count} message${count !== 1 ? 's' : ''}</span>
+          <span>•</span>
+          <span>${time}</span>
+          <span style="margin-left:auto;"></span>
+          <button class="btn btn-ghost btn-sm" title="Delete conversation" data-console-history-delete>Delete</button>
+        </div>
+      `;
+      item.querySelector('[data-console-history-delete]')?.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        deleteConsoleConversation(sid);
+      });
+      list.appendChild(item);
+    }
+  } catch (e) {
+    list.innerHTML = `<div class="history-empty">Failed to load: ${escapeHtml(e.message || String(e))}</div>`;
+  }
+}
+
+function runBelongsToQuickChat(run) {
+  const md = run && typeof run.metadata === 'object' ? run.metadata : {};
+  const reply = md && typeof md.replyTo === 'object' ? md.replyTo : {};
+  const channel = String(reply.channel || '').toLowerCase();
+  const destination = String(reply.destination || '').toLowerCase();
+  const tab = String(((reply.metadata && reply.metadata.tab) || '')).toLowerCase();
+  return (channel === 'devui' && destination === 'quick-chat') || tab === 'quick-chat';
+}
+
+function deleteConsoleConversation(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  if (!confirm('Delete this quick chat conversation from history?')) return;
+  hideQuickChatThread(`session:${sid}`);
+  if (consoleSessionId === sid) {
+    startNewConsoleConversation();
+  }
+  loadConsoleHistory();
+}
+
+function restoreConsoleSession(sessionId, sessionRuns, selectedItem = null) {
+  consoleSessionId = String(sessionId || '').trim();
+  consoleConversation = [];
+  document.querySelectorAll('#consoleHistoryList .history-item').forEach((el) => el.classList.remove('active'));
+  if (selectedItem) selectedItem.classList.add('active');
+
+  const messages = document.getElementById('consoleMessages');
+  if (!messages) return;
+  messages.innerHTML = '';
+
+  const orderedRuns = [...(sessionRuns || [])].reverse();
+  for (const run of orderedRuns) {
+    const synthetic = isAutoContinueInput(run.input || '');
+    if (run.input && !synthetic) appendConsoleMessage('user', run.input);
+    if (run.output) {
+      const meta = [
+        run.provider ? `provider=${run.provider}` : '',
+        run.runId ? `run=${run.runId}` : '',
+      ].filter(Boolean).join(' • ');
+      appendConsoleMessage('assistant', run.output, meta);
+    }
+  }
+  document.getElementById('consoleInput')?.focus();
+}
+
+function startNewConsoleConversation() {
+  resetConsoleSession();
+  document.getElementById('consoleInput')?.focus();
+}
+
 function truncate(str, len) {
   if (!str) return '';
   return str.length > len ? str.substring(0, len) + '…' : str;
@@ -3275,6 +4131,7 @@ async function renderPromptTemplate() {
     alert('Prompt variables must be valid JSON object');
     return;
   }
+  const done = setButtonLoading(document.getElementById('renderPromptBtn'), 'Rendering...');
   try {
     const resp = await api.request('/api/v1/prompts/render', {
       method: 'POST',
@@ -3283,6 +4140,8 @@ async function renderPromptTemplate() {
     document.getElementById('promptRenderOutput').textContent = resp.rendered || '';
   } catch (e) {
     document.getElementById('promptRenderOutput').textContent = 'Render error: ' + (e.message || e);
+  } finally {
+    done();
   }
 }
 
@@ -3291,6 +4150,7 @@ async function savePromptSpec() {
     alert('Operator role required');
     return;
   }
+  const done = setButtonLoading(document.getElementById('savePromptBtn'), 'Saving...');
   try {
     const resp = await api.request('/api/v1/prompts', {
       method: 'POST',
@@ -3303,6 +4163,8 @@ async function savePromptSpec() {
     alert(`Saved ${selectedPromptRef}`);
   } catch (e) {
     alert('Save failed: ' + (e.message || e));
+  } finally {
+    done();
   }
 }
 
@@ -3314,12 +4176,15 @@ async function deletePromptSpec() {
   const ref = selectedPromptRef || `${promptSpecFromForm().name}@${promptSpecFromForm().version || 'v1'}`;
   if (!ref || ref === '@') return;
   if (!confirm(`Delete prompt ${ref}?`)) return;
+  const done = setButtonLoading(document.getElementById('deletePromptBtn'), 'Deleting...');
   try {
     await api.request(`/api/v1/prompts/${encodeURIComponent(ref)}`, { method: 'DELETE' });
     newPrompt();
     await loadPrompts();
   } catch (e) {
     alert('Delete failed: ' + (e.message || e));
+  } finally {
+    done();
   }
 }
 
@@ -3340,6 +4205,7 @@ async function loadCronJobs() {
           <strong>${escapeHtml(j.name)}</strong>
           <span style="margin-left:8px;font-size:12px;color:var(--text-muted);font-family:monospace;">${escapeHtml(j.cronExpr)}</span>
           ${j.config?.workflow ? `<span class="badge">${escapeHtml(j.config.workflow)}</span>` : ''}
+          ${j.config?.replyTo?.channel ? `<span class="badge">${escapeHtml(j.config.replyTo.channel)}${j.config?.replyTo?.destination ? `: ${escapeHtml(j.config.replyTo.destination)}` : ''}</span>` : ''}
           ${!j.enabled ? '<span class="badge" style="background:var(--accent-warning);color:#000;">paused</span>' : ''}
         </div>
         <div style="font-size:12px;color:var(--text-muted);text-align:right;min-width:160px;">
@@ -3376,24 +4242,43 @@ async function createCronJob() {
   const input = document.getElementById('cronJobInput')?.value?.trim();
   const workflow = document.getElementById('cronJobWorkflow')?.value || '';
   const systemPrompt = document.getElementById('cronJobSystemPrompt')?.value?.trim() || '';
+  const replyChannel = document.getElementById('cronReplyChannel')?.value?.trim() || '';
+  const replyDestination = document.getElementById('cronReplyDestination')?.value?.trim() || '';
+  const replyThread = document.getElementById('cronReplyThread')?.value?.trim() || '';
+  const replyUser = document.getElementById('cronReplyUser')?.value?.trim() || '';
   if (!name || !cronExpr || !input) {
     alert('Name, cron expression, and input are required');
     return;
   }
+  const replyTo = (replyChannel || replyDestination || replyThread || replyUser)
+    ? {
+      channel: replyChannel || undefined,
+      destination: replyDestination || undefined,
+      threadId: replyThread || undefined,
+      userId: replyUser || undefined,
+    }
+    : undefined;
+  const done = setButtonLoading(document.getElementById('createCronJobBtn'), 'Creating...');
   try {
     await api.post('/api/v1/cron/jobs', {
       name,
       cronExpr,
-      config: { input, workflow, systemPrompt, tools: ['@default'] },
+      config: { input, workflow, systemPrompt, tools: ['@default'], replyTo },
     });
     toggleCronForm();
     document.getElementById('cronJobName').value = '';
     document.getElementById('cronJobExpr').value = '';
     document.getElementById('cronJobInput').value = '';
     document.getElementById('cronJobSystemPrompt').value = '';
+    if (document.getElementById('cronReplyChannel')) document.getElementById('cronReplyChannel').value = '';
+    if (document.getElementById('cronReplyDestination')) document.getElementById('cronReplyDestination').value = '';
+    if (document.getElementById('cronReplyThread')) document.getElementById('cronReplyThread').value = '';
+    if (document.getElementById('cronReplyUser')) document.getElementById('cronReplyUser').value = '';
     loadCronJobs();
   } catch (e) {
     alert('Failed to create job: ' + (e.message || e));
+  } finally {
+    done();
   }
 }
 
@@ -3448,9 +4333,16 @@ window.loadCronJobs = loadCronJobs;
 
 // ===== Event Buttons =====
 function initButtons() {
-  document.getElementById('refreshRuns')?.addEventListener('click', loadRuns);
+  initCollapsibleCards();
+  document.getElementById('refreshRuns')?.addEventListener('click', () => refreshRunsLive({ force: true }));
+  document.getElementById('toggleRunsLive')?.addEventListener('click', toggleRunsLive);
   document.getElementById('refreshTools')?.addEventListener('click', loadTools);
+  document.getElementById('createCustomToolBtn')?.addEventListener('click', createCustomTool);
+  document.getElementById('refreshCustomToolsBtn')?.addEventListener('click', loadCustomTools);
   document.getElementById('refreshWorkflows')?.addEventListener('click', loadWorkflows);
+  document.getElementById('refreshNamedFlows')?.addEventListener('click', loadFlows);
+  document.getElementById('runNamedFlowBtn')?.addEventListener('click', runNamedFlowFromUI);
+  document.getElementById('deleteNamedFlowBtn')?.addEventListener('click', deleteNamedFlowFromUI);
   document.getElementById('toggleWorkflowCreate')?.addEventListener('click', () => toggleWorkflowCreateForm());
   document.getElementById('cancelWorkflowCreate')?.addEventListener('click', () => toggleWorkflowCreateForm(false));
   document.getElementById('createWorkflowBtn')?.addEventListener('click', createWorkflowFromUI);
@@ -3497,20 +4389,25 @@ function initSSE() {
     const source = new EventSource(`/api/v1/stream/events${qs}`);
 
     source.onmessage = () => {
-      loadDashboard();
-      loadRecentActivity();
-      if (currentRun) {
-        selectRun(currentRun);
+      if (sseRefreshDebounceTimer) {
+        clearTimeout(sseRefreshDebounceTimer);
       }
-      if (document.getElementById('tab-runtime')?.classList.contains('active')) {
-        loadRuntime();
-      }
-      if (document.getElementById('tab-tools')?.classList.contains('active')) {
-        loadToolIntelligence();
-      }
-      if (document.getElementById('tab-audit')?.classList.contains('active')) {
-        loadAuditLogs();
-      }
+      sseRefreshDebounceTimer = setTimeout(() => {
+        loadDashboard();
+        loadRecentActivity();
+        if (isRunsTabActive() && runsLiveEnabled) {
+          refreshRunsLive();
+        }
+        if (document.getElementById('tab-runtime')?.classList.contains('active')) {
+          loadRuntime();
+        }
+        if (document.getElementById('tab-tools')?.classList.contains('active')) {
+          loadToolIntelligence();
+        }
+        if (document.getElementById('tab-audit')?.classList.contains('active')) {
+          loadAuditLogs();
+        }
+      }, 300);
     };
 
     source.onerror = () => {
@@ -3834,8 +4731,7 @@ async function runAction() {
   }
 
   const btn = document.getElementById('runActionBtn');
-  btn.disabled = true;
-  btn.textContent = 'Running…';
+  const done = setButtonLoading(btn, 'Running...');
 
   // Determine input based on mode
   const jsonEditor = document.getElementById('actionJsonEditor');
@@ -3846,8 +4742,7 @@ async function runAction() {
       input = JSON.parse(document.getElementById('actionJsonInput').value);
     } catch (e) {
       alert('Invalid JSON: ' + e.message);
-      btn.disabled = false;
-      btn.textContent = 'Run';
+      done();
       return;
     }
   } else {
@@ -3920,8 +4815,7 @@ async function runAction() {
     document.getElementById('actionResultStatus').className = 'status-badge badge status-failed';
     document.getElementById('actionResultOutput').textContent = e.message || String(e);
   } finally {
-    btn.disabled = false;
-    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><polygon points="5,3 19,12 5,21"/></svg> Run`;
+    done();
   }
 }
 
@@ -4009,6 +4903,7 @@ async function installSkillFromGitHub() {
   }
   const repoUrl = document.getElementById('skillRepoUrl').value.trim();
   if (!repoUrl) { alert('Repository URL is required'); return; }
+  const done = setButtonLoading(document.getElementById('installSkillBtn'), 'Installing...');
   try {
     const res = await api.post('/api/v1/skills', { repoUrl });
     alert(`Installed ${res.count} skill(s) from ${repoUrl}`);
@@ -4016,21 +4911,29 @@ async function installSkillFromGitHub() {
     loadSkills();
   } catch (e) {
     alert('Install failed: ' + e.message);
+  } finally {
+    done();
   }
 }
 
 // ===== Bootstrap =====
 (async function init() {
+  runsLiveEnabled = localStorage.getItem('runs_live_enabled') !== '0';
   initTheme();
   initNavigation();
   initSettings();
   initSearch();
   initCommandBar();
   initPlayground();
+  initConsoleGround();
   initButtons();
+  updateRunsLiveToggleButton();
   await loadPrincipal();
   if (queryParam('pgHistory') === '1' && !playgroundHistoryVisible) {
     togglePlaygroundHistory();
+  }
+  if (queryParam('qcHistory') === '1' && !consoleHistoryVisible) {
+    toggleConsoleHistory();
   }
 
   // Load all data
@@ -4045,6 +4948,7 @@ async function installSkillFromGitHub() {
     loadAuthKeys(),
     loadAuditLogs(),
   ]);
+  updateRunsLivePolling();
 
   initSSE();
 })();

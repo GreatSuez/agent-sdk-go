@@ -6,8 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/PipeOpsHQ/agent-sdk-go/framework/storage"
 )
 
 type pdfGeneratorArgs struct {
@@ -18,11 +19,12 @@ type pdfGeneratorArgs struct {
 }
 
 type pdfGeneratorResult struct {
-	Title         string `json:"title,omitempty"`
-	OutputPath    string `json:"output_path"`
-	Bytes         int    `json:"bytes"`
-	LinesIncluded int    `json:"lines_included"`
-	Truncated     bool   `json:"truncated"`
+	Title         string              `json:"title,omitempty"`
+	OutputPath    string              `json:"output_path"`
+	Bytes         int                 `json:"bytes"`
+	LinesIncluded int                 `json:"lines_included"`
+	Truncated     bool                `json:"truncated"`
+	Backup        *storage.BackupInfo `json:"backup,omitempty"`
 }
 
 func NewPDFGenerator() Tool {
@@ -32,7 +34,7 @@ func NewPDFGenerator() Tool {
 			"title":       map[string]any{"type": "string", "description": "Document title shown in PDF metadata."},
 			"text":        map[string]any{"type": "string", "description": "Raw text content to render into PDF."},
 			"source_path": map[string]any{"type": "string", "description": "Optional source file path to read text from when text is omitted."},
-			"output_path": map[string]any{"type": "string", "description": "Output PDF path. Defaults to ./.ai-agent/generated/document.pdf"},
+			"output_path": map[string]any{"type": "string", "description": "Output PDF path. Relative paths are saved under AGENT_STORAGE_DIR (default ./.ai-agent/generated)."},
 		},
 	}
 
@@ -41,7 +43,6 @@ func NewPDFGenerator() Tool {
 		"Generate a simple PDF from text content or a source document file.",
 		schema,
 		func(ctx context.Context, args json.RawMessage) (any, error) {
-			_ = ctx
 			var in pdfGeneratorArgs
 			if err := json.Unmarshal(args, &in); err != nil {
 				return nil, fmt.Errorf("invalid pdf_generator args: %w", err)
@@ -62,26 +63,34 @@ func NewPDFGenerator() Tool {
 
 			outputPath := strings.TrimSpace(in.OutputPath)
 			if outputPath == "" {
-				outputPath = "./.ai-agent/generated/document.pdf"
-			}
-			if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
-				return nil, fmt.Errorf("create output directory: %w", err)
+				outputPath = ""
 			}
 
 			pdf, linesIncluded, truncated := renderSimplePDF(strings.TrimSpace(in.Title), text)
-			if err := os.WriteFile(outputPath, pdf, 0644); err != nil {
+			saved, err := storage.Default().SaveBytes(ctx, outputPath, defaultPDFFileName(strings.TrimSpace(in.Title)), pdf)
+			if err != nil {
 				return nil, fmt.Errorf("write PDF: %w", err)
 			}
 
 			return pdfGeneratorResult{
 				Title:         strings.TrimSpace(in.Title),
-				OutputPath:    outputPath,
+				OutputPath:    saved.Path,
 				Bytes:         len(pdf),
 				LinesIncluded: linesIncluded,
 				Truncated:     truncated,
+				Backup:        saved.Backup,
 			}, nil
 		},
 	)
+}
+
+func defaultPDFFileName(title string) string {
+	base := strings.TrimSpace(strings.ToLower(title))
+	if base == "" {
+		base = "document"
+	}
+	base = strings.ReplaceAll(base, " ", "-")
+	return base + ".pdf"
 }
 
 func renderSimplePDF(title, text string) ([]byte, int, bool) {

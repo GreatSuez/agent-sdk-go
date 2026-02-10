@@ -166,18 +166,74 @@ func (cm *ContextManager) ensureValidStructure(messages []types.Message) []types
 	}
 
 	var result []types.Message
-	pendingToolCalls := make(map[string]bool)
+	pendingToolCallsByID := make(map[string]bool)
+	pendingToolCallsByName := make(map[string]int)
+	pendingToolCount := 0
 	toolBlockStart := -1
 
 	dropOpenToolBlock := func() {
-		if len(pendingToolCalls) == 0 {
+		if pendingToolCount == 0 {
 			return
 		}
 		if toolBlockStart >= 0 && toolBlockStart <= len(result) {
 			result = result[:toolBlockStart]
 		}
-		pendingToolCalls = make(map[string]bool)
+		pendingToolCallsByID = make(map[string]bool)
+		pendingToolCallsByName = make(map[string]int)
+		pendingToolCount = 0
 		toolBlockStart = -1
+	}
+
+	consumePendingToolCall := func(msg types.Message) bool {
+		if pendingToolCount == 0 {
+			return false
+		}
+		if msg.ToolCallID != "" {
+			if pendingToolCallsByID[msg.ToolCallID] {
+				delete(pendingToolCallsByID, msg.ToolCallID)
+				pendingToolCount--
+				if pendingToolCount == 0 {
+					toolBlockStart = -1
+				}
+				return true
+			}
+			return false
+		}
+
+		name := strings.TrimSpace(msg.Name)
+		if name != "" {
+			if pendingToolCallsByName[name] > 0 {
+				pendingToolCallsByName[name]--
+				if pendingToolCallsByName[name] == 0 {
+					delete(pendingToolCallsByName, name)
+				}
+				pendingToolCount--
+				if pendingToolCount == 0 {
+					toolBlockStart = -1
+				}
+				return true
+			}
+			return false
+		}
+
+		if len(pendingToolCallsByID) == 0 && pendingToolCount > 0 {
+			for toolName, count := range pendingToolCallsByName {
+				if count <= 0 {
+					continue
+				}
+				pendingToolCallsByName[toolName]--
+				if pendingToolCallsByName[toolName] == 0 {
+					delete(pendingToolCallsByName, toolName)
+				}
+				pendingToolCount--
+				if pendingToolCount == 0 {
+					toolBlockStart = -1
+				}
+				return true
+			}
+		}
+
+		return false
 	}
 
 	for _, msg := range messages {
@@ -189,7 +245,14 @@ func (cm *ContextManager) ensureValidStructure(messages []types.Message) []types
 				toolBlockStart = len(result)
 				result = append(result, msg)
 				for _, tc := range msg.ToolCalls {
-					pendingToolCalls[tc.ID] = true
+					if strings.TrimSpace(tc.ID) != "" {
+						pendingToolCallsByID[tc.ID] = true
+						pendingToolCount++
+						continue
+					}
+					toolName := strings.TrimSpace(tc.Name)
+					pendingToolCallsByName[toolName]++
+					pendingToolCount++
 				}
 				continue
 			}
@@ -200,16 +263,12 @@ func (cm *ContextManager) ensureValidStructure(messages []types.Message) []types
 			continue
 		}
 
-		// For tool results, only include if we have the corresponding call
-		if msg.Role == types.RoleTool && msg.ToolCallID != "" {
-			if pendingToolCalls[msg.ToolCallID] {
+		// For tool results, only include if we have a pending tool-call block.
+		if msg.Role == types.RoleTool {
+			if consumePendingToolCall(msg) {
 				result = append(result, msg)
-				delete(pendingToolCalls, msg.ToolCallID)
-				if len(pendingToolCalls) == 0 {
-					toolBlockStart = -1
-				}
 			}
-			// Skip orphaned tool results
+			// Skip orphaned tool results or out-of-order tool responses.
 			continue
 		}
 

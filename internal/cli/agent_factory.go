@@ -113,6 +113,9 @@ func buildExecutor(agent *agentfw.Agent, store state.Store, observer observe.Sin
 	if name == "default" {
 		name = defaultWorkflow
 	}
+	if alias, ok := workflowAlias(name); ok {
+		name = alias
+	}
 
 	builder, ok := workflow.Get(name)
 	if !ok {
@@ -124,6 +127,16 @@ func buildExecutor(agent *agentfw.Agent, store state.Store, observer observe.Sin
 	}
 	exec.SetObserver(observer)
 	return exec, nil
+}
+
+func workflowAlias(name string) (string, bool) {
+	normalized := strings.TrimSpace(strings.ToLower(name))
+	switch normalized {
+	case "web-scrape-and-summarize", "web_scrape_and_summarize", "webscrapeandsummarize":
+		return "map-reduce", true
+	default:
+		return "", false
+	}
 }
 
 func buildObserver() (observe.Sink, func()) {

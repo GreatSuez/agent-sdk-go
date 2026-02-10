@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/PipeOpsHQ/agent-sdk-go/framework/delivery"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/llm"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/observe"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/state"
@@ -225,6 +226,7 @@ func (a *Agent) RunDetailed(ctx context.Context, input string) (types.RunResult,
 	runID := uuid.NewString()
 	sessionID := a.ensureSessionID()
 	startedAt := time.Now().UTC()
+	metadata := runMetadataFromContext(ctx)
 
 	// Prepend conversation history for multi-turn context, then add current input.
 	var messages []types.Message
@@ -261,7 +263,7 @@ func (a *Agent) RunDetailed(ctx context.Context, input string) (types.RunResult,
 		Output:      "",
 		Messages:    append([]types.Message(nil), messages...),
 		Usage:       nil,
-		Metadata:    map[string]any{},
+		Metadata:    metadata,
 		Error:       "",
 		CreatedAt:   &startedAt,
 		UpdatedAt:   &startedAt,
@@ -437,7 +439,7 @@ func (a *Agent) RunDetailed(ctx context.Context, input string) (types.RunResult,
 				Output:      modelMsg.Content,
 				Messages:    append([]types.Message(nil), messages...),
 				Usage:       copyUsage(finalUsage),
-				Metadata:    map[string]any{},
+				Metadata:    metadata,
 				Error:       "",
 				CreatedAt:   &startedAt,
 				UpdatedAt:   &completedAt,
@@ -841,6 +843,7 @@ func (a *Agent) saveProgress(
 	usage *types.Usage,
 ) error {
 	now := time.Now().UTC()
+	metadata := runMetadataFromContext(ctx)
 	return a.saveRun(ctx, state.RunRecord{
 		RunID:     runID,
 		SessionID: sessionID,
@@ -850,7 +853,7 @@ func (a *Agent) saveProgress(
 		Output:    "",
 		Messages:  append([]types.Message(nil), messages...),
 		Usage:     copyUsage(usage),
-		Metadata:  map[string]any{},
+		Metadata:  metadata,
 		Error:     "",
 		CreatedAt: &createdAt,
 		UpdatedAt: &now,
@@ -868,6 +871,7 @@ func (a *Agent) markFailed(
 	runErr error,
 ) error {
 	now := time.Now().UTC()
+	metadata := runMetadataFromContext(ctx)
 	errText := ""
 	if runErr != nil {
 		errText = runErr.Error()
@@ -881,7 +885,7 @@ func (a *Agent) markFailed(
 		Output:      "",
 		Messages:    append([]types.Message(nil), messages...),
 		Usage:       copyUsage(usage),
-		Metadata:    map[string]any{},
+		Metadata:    metadata,
 		Error:       errText,
 		CreatedAt:   &createdAt,
 		UpdatedAt:   &now,
@@ -900,6 +904,20 @@ func (a *Agent) markFailed(
 		Message:   "run failed",
 	})
 	return nil
+}
+
+func runMetadataFromContext(ctx context.Context) map[string]any {
+	md := map[string]any{}
+	if target := delivery.FromContext(ctx); target != nil {
+		md["replyTo"] = map[string]any{
+			"channel":     target.Channel,
+			"destination": target.Destination,
+			"threadId":    target.ThreadID,
+			"userId":      target.UserID,
+			"metadata":    target.Metadata,
+		}
+	}
+	return md
 }
 
 func (a *Agent) saveRun(ctx context.Context, run state.RunRecord) error {

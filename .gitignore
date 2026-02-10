@@ -1,5 +1,6 @@
 # Agent runtime data
 .ai-agent/
+skills/
 
 # Dependencies
 vendor/

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/PipeOpsHQ/agent-sdk-go/framework/delivery"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/devui/auth"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/devui/catalog"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/flow"
@@ -44,6 +45,8 @@ type Config struct {
 	WorkflowSpecDir  string
 	ProviderEnvFile  string
 	PromptSpecDir    string
+	FlowSpecDir      string
+	ToolSpecDir      string
 }
 
 type Server struct {
@@ -73,6 +76,12 @@ func NewServer(cfg Config) *Server {
 	}
 	if strings.TrimSpace(cfg.PromptSpecDir) == "" {
 		cfg.PromptSpecDir = "./.ai-agent/prompts"
+	}
+	if strings.TrimSpace(cfg.FlowSpecDir) == "" {
+		cfg.FlowSpecDir = "./.ai-agent/flows"
+	}
+	if strings.TrimSpace(cfg.ToolSpecDir) == "" {
+		cfg.ToolSpecDir = "./.ai-agent/tools"
 	}
 	s := &Server{
 		cfg:             cfg,
@@ -165,6 +174,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/tools/templates", s.require(auth.RoleViewer, s.handleToolTemplates))
 	s.mux.HandleFunc("/api/v1/tools/instances", s.require(auth.RoleViewer, s.handleToolInstances))
 	s.mux.HandleFunc("/api/v1/tools/instances/", s.require(auth.RoleViewer, s.handleToolInstanceByID))
+	s.mux.HandleFunc("/api/v1/tools/custom", s.require(auth.RoleViewer, s.handleCustomTools))
+	s.mux.HandleFunc("/api/v1/tools/custom/", s.require(auth.RoleViewer, s.handleCustomToolByName))
 	s.mux.HandleFunc("/api/v1/tools/bundles", s.require(auth.RoleViewer, s.handleToolBundles))
 	s.mux.HandleFunc("/api/v1/tools/catalog", s.require(auth.RoleViewer, s.handleToolCatalog))
 	s.mux.HandleFunc("/api/v1/workflows/registry", s.require(auth.RoleViewer, s.handleWorkflowRegistry))
@@ -183,6 +194,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/skills/", s.require(auth.RoleViewer, s.handleSkillByName))
 	s.mux.HandleFunc("/api/v1/guardrails", s.require(auth.RoleViewer, s.handleGuardrails))
 	s.mux.HandleFunc("/api/v1/flows", s.require(auth.RoleViewer, s.handleFlows))
+	s.mux.HandleFunc("/api/v1/flows/", s.require(auth.RoleViewer, s.handleFlowByName))
 	s.mux.HandleFunc("/api/v1/prompts", s.require(auth.RoleViewer, s.handlePrompts))
 	s.mux.HandleFunc("/api/v1/prompts/", s.require(auth.RoleViewer, s.handlePromptByRef))
 	s.mux.HandleFunc("/api/v1/prompts/render", s.require(auth.RoleViewer, s.handlePromptRender))
@@ -719,6 +731,7 @@ func (s *Server) handlePlaygroundRun(w http.ResponseWriter, r *http.Request, _ p
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	req.ReplyTo = delivery.Normalize(req.ReplyTo)
 	resp, err := s.cfg.Playground.Run(r.Context(), req)
 	if err != nil {
 		writeJSON(w, http.StatusOK, PlaygroundResponse{
@@ -754,6 +767,7 @@ func (s *Server) handlePlaygroundStream(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	req.ReplyTo = delivery.Normalize(req.ReplyTo)
 
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -1050,16 +1064,52 @@ func (s *Server) handleToolCatalog(w http.ResponseWriter, r *http.Request, _ pri
 	})
 }
 
-func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request, _ principal) {
-	if r.Method != http.MethodGet {
+func (s *Server) handleFlows(w http.ResponseWriter, r *http.Request, p principal) {
+	switch r.Method {
+	case http.MethodGet:
+		defs := flow.All()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"flows": defs,
+			"count": len(defs),
+		})
+	case http.MethodPost:
+		if p.Role.Rank() < auth.RoleOperator.Rank() {
+			writeError(w, http.StatusForbidden, fmt.Errorf("insufficient role: requires %s", auth.RoleOperator))
+			return
+		}
+		var req flowCreateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		def := req.Flow
+		if strings.TrimSpace(def.Name) == "" {
+			def = flow.Definition(req.Legacy)
+		}
+		def.Name = strings.TrimSpace(def.Name)
+		if def.Name == "" {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("flow name is required"))
+			return
+		}
+		if err := flow.Upsert(&def); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		persist := req.Persist
+		if !req.HasPersist {
+			persist = true
+		}
+		if persist {
+			if err := s.persistFlowSpec(def); err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+		s.audit(r.Context(), p, "flow.upsert", "flows", map[string]any{"name": def.Name})
+		writeJSON(w, http.StatusCreated, map[string]any{"ok": true, "flow": def, "persisted": persist})
+	default:
 		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method not allowed"))
-		return
 	}
-	defs := flow.All()
-	writeJSON(w, http.StatusOK, map[string]any{
-		"flows": defs,
-		"count": len(defs),
-	})
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {

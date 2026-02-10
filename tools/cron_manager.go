@@ -5,18 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/PipeOpsHQ/agent-sdk-go/framework/delivery"
 	cronpkg "github.com/PipeOpsHQ/agent-sdk-go/framework/runtime/cron"
 )
 
 type cronManagerArgs struct {
-	Operation    string   `json:"operation"`
-	Name         string   `json:"name,omitempty"`
-	CronExpr     string   `json:"cronExpr,omitempty"`
-	Input        string   `json:"input,omitempty"`
-	Workflow     string   `json:"workflow,omitempty"`
-	Tools        []string `json:"tools,omitempty"`
-	SystemPrompt string   `json:"systemPrompt,omitempty"`
-	Enabled      *bool    `json:"enabled,omitempty"`
+	Operation    string           `json:"operation"`
+	Name         string           `json:"name,omitempty"`
+	CronExpr     string           `json:"cronExpr,omitempty"`
+	Input        string           `json:"input,omitempty"`
+	Workflow     string           `json:"workflow,omitempty"`
+	Tools        []string         `json:"tools,omitempty"`
+	SystemPrompt string           `json:"systemPrompt,omitempty"`
+	ReplyTo      *delivery.Target `json:"replyTo,omitempty"`
+	Enabled      *bool            `json:"enabled,omitempty"`
 }
 
 // NewCronManager creates a tool that lets agents manage cron-scheduled jobs.
@@ -55,6 +57,17 @@ func NewCronManager(scheduler *cronpkg.Scheduler) Tool {
 				"type":        "string",
 				"description": "System prompt for the scheduled agent run.",
 			},
+			"replyTo": map[string]any{
+				"type":        "object",
+				"description": "Optional response routing target (for Slack, Telegram, DevUI, API/webhook, etc.).",
+				"properties": map[string]any{
+					"channel":     map[string]any{"type": "string", "description": "Channel type: devui, api, slack, telegram, webhook."},
+					"destination": map[string]any{"type": "string", "description": "Channel destination id (e.g., Slack channel id, Telegram chat id, webhook name)."},
+					"threadId":    map[string]any{"type": "string", "description": "Optional thread or conversation id."},
+					"userId":      map[string]any{"type": "string", "description": "Optional end-user id for direct replies."},
+					"metadata":    map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+				},
+			},
 		},
 		"required": []string{"operation"},
 	}
@@ -92,11 +105,16 @@ func NewCronManager(scheduler *cronpkg.Scheduler) Tool {
 				if in.Name == "" || in.CronExpr == "" || in.Input == "" {
 					return nil, fmt.Errorf("name, cronExpr, and input are required for add")
 				}
+				replyTo := delivery.Normalize(in.ReplyTo)
+				if replyTo == nil {
+					replyTo = delivery.FromContext(ctx)
+				}
 				cfg := cronpkg.JobConfig{
 					Workflow:     in.Workflow,
 					Tools:        in.Tools,
 					SystemPrompt: in.SystemPrompt,
 					Input:        in.Input,
+					ReplyTo:      replyTo,
 				}
 				if err := scheduler.Add(in.Name, in.CronExpr, cfg); err != nil {
 					return map[string]any{"error": err.Error()}, nil

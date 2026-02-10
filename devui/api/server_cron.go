@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/PipeOpsHQ/agent-sdk-go/framework/delivery"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/devui/auth"
 	cronpkg "github.com/PipeOpsHQ/agent-sdk-go/framework/runtime/cron"
 )
@@ -40,12 +41,20 @@ func (s *Server) handleCronJobs(w http.ResponseWriter, r *http.Request, p princi
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 			return
 		}
+		req.Config.ReplyTo = delivery.Normalize(req.Config.ReplyTo)
 		if err := s.cfg.Scheduler.Add(req.Name, req.CronExpr, req.Config); err != nil {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 			return
 		}
 		job, _ := s.cfg.Scheduler.Get(req.Name)
-		s.audit(r.Context(), p, "cron.create", "cron", map[string]any{"name": req.Name, "cronExpr": req.CronExpr})
+		auditPayload := map[string]any{"name": req.Name, "cronExpr": req.CronExpr}
+		if req.Config.ReplyTo != nil {
+			auditPayload["channel"] = req.Config.ReplyTo.Channel
+			auditPayload["destination"] = req.Config.ReplyTo.Destination
+			auditPayload["threadId"] = req.Config.ReplyTo.ThreadID
+			auditPayload["userId"] = req.Config.ReplyTo.UserID
+		}
+		s.audit(r.Context(), p, "cron.create", "cron", auditPayload)
 		writeJSON(w, http.StatusCreated, job)
 
 	default:
@@ -111,6 +120,7 @@ func (s *Server) handleCronJobByName(w http.ResponseWriter, r *http.Request, p p
 			Workflow:     job.Config.Workflow,
 			Tools:        job.Config.Tools,
 			SystemPrompt: job.Config.SystemPrompt,
+			ReplyTo:      job.Config.ReplyTo,
 		})
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	agentfw "github.com/PipeOpsHQ/agent-sdk-go/framework/agent"
+	"github.com/PipeOpsHQ/agent-sdk-go/framework/delivery"
 	devuiapi "github.com/PipeOpsHQ/agent-sdk-go/framework/devui/api"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/flow"
 	"github.com/PipeOpsHQ/agent-sdk-go/framework/guardrail"
@@ -44,11 +45,18 @@ func (r *localPlaygroundRunner) Run(ctx context.Context, req devuiapi.Playground
 
 	allSkills := make(map[string]bool)
 	for _, s := range flowSkills {
-		allSkills[s] = true
+		s = strings.TrimSpace(s)
+		if s != "" {
+			allSkills[s] = true
+		}
 	}
 	for _, s := range req.Skills {
-		allSkills[s] = true
+		s = strings.TrimSpace(s)
+		if s != "" {
+			allSkills[s] = true
+		}
 	}
+	appliedSkills := sortedSkillNames(allSkills)
 	systemPrompt := strings.TrimSpace(req.SystemPrompt)
 	for skillName := range allSkills {
 		if s, ok := skill.Get(skillName); ok {
@@ -75,6 +83,11 @@ func (r *localPlaygroundRunner) Run(ctx context.Context, req devuiapi.Playground
 	} else if systemPrompt != "" {
 		req.SystemPrompt = systemPrompt
 	}
+	req.ReplyTo = delivery.Normalize(req.ReplyTo)
+	if req.ReplyTo != nil {
+		req.SystemPrompt = strings.TrimSpace(req.SystemPrompt + "\n\n" + buildReplyChannelHint(req.ReplyTo))
+	}
+	runCtx := delivery.WithTarget(ctx, req.ReplyTo)
 
 	if strings.TrimSpace(req.Workflow) == "summary-memory" {
 		if summary := loadLatestContextSummary(ctx, r.store, strings.TrimSpace(req.SessionID)); summary != "" {
@@ -138,13 +151,13 @@ func (r *localPlaygroundRunner) Run(ctx context.Context, req devuiapi.Playground
 		}
 
 		if strings.TrimSpace(turnOpts.workflow) == "" {
-			result, err = agent.RunDetailed(ctx, currentInput)
+			result, err = agent.RunDetailed(runCtx, currentInput)
 		} else {
 			exec, execErr := buildExecutor(agent, r.store, r.observer, turnOpts)
 			if execErr != nil {
 				return devuiapi.PlaygroundResponse{}, fmt.Errorf("executor create failed: %w", execErr)
 			}
-			result, err = exec.Run(ctx, currentInput)
+			result, err = exec.Run(runCtx, currentInput)
 		}
 		if err != nil {
 			return devuiapi.PlaygroundResponse{}, err
@@ -166,12 +179,53 @@ func (r *localPlaygroundRunner) Run(ctx context.Context, req devuiapi.Playground
 	}
 
 	return devuiapi.PlaygroundResponse{
-		Status:    "completed",
-		Output:    result.Output,
-		RunID:     result.RunID,
-		SessionID: currentSessionID,
-		Provider:  provider.Name(),
+		Status:        "completed",
+		Output:        result.Output,
+		RunID:         result.RunID,
+		SessionID:     currentSessionID,
+		Provider:      provider.Name(),
+		AppliedSkills: appliedSkills,
+		ReplyTo:       req.ReplyTo,
 	}, nil
+}
+
+func sortedSkillNames(skills map[string]bool) []string {
+	if len(skills) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(skills))
+	for name := range skills {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func buildReplyChannelHint(target *delivery.Target) string {
+	if target == nil {
+		return ""
+	}
+	parts := []string{}
+	if v := strings.TrimSpace(target.Channel); v != "" {
+		parts = append(parts, "channel="+v)
+	}
+	if v := strings.TrimSpace(target.Destination); v != "" {
+		parts = append(parts, "destination="+v)
+	}
+	if v := strings.TrimSpace(target.ThreadID); v != "" {
+		parts = append(parts, "threadId="+v)
+	}
+	if v := strings.TrimSpace(target.UserID); v != "" {
+		parts = append(parts, "userId="+v)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "Current reply channel context: " + strings.Join(parts, ", ") + ". If asked to schedule reminders for this same channel, set cron job config.replyTo to this channel context unless the user explicitly asks for another destination."
 }
 
 func shouldAutoContinue(output string) bool {

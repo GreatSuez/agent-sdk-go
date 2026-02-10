@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -36,6 +37,8 @@ type uiOptions struct {
 	dbPath           string
 	attemptsPath     string
 	workflowDir      string
+	flowDir          string
+	toolDir          string
 	providerEnvFile  string
 	promptDir        string
 	redisAddr        string
@@ -57,6 +60,8 @@ func runUI(ctx context.Context, args []string, remoteMode bool) {
 	skill.RegisterBuiltins()
 	skill.ScanDefaults()
 	loadWorkflowSpecs(opts.workflowDir)
+	loadFlowSpecs(opts.flowDir)
+	loadCustomToolSpecs(opts.toolDir)
 	if err := devuiapi.LoadProviderEnvFile(opts.providerEnvFile); err != nil {
 		log.Printf("provider env file unavailable: %v", err)
 	}
@@ -171,6 +176,7 @@ func runUI(ctx context.Context, args []string, remoteMode bool) {
 			Workflow:     cfg.Workflow,
 			Tools:        cfg.Tools,
 			SystemPrompt: cfg.SystemPrompt,
+			ReplyTo:      cfg.ReplyTo,
 		})
 		if err != nil {
 			return "", err
@@ -202,6 +208,8 @@ func runUI(ctx context.Context, args []string, remoteMode bool) {
 		RequireAPIKey:    opts.requireAPIKey,
 		AllowLocalNoAuth: opts.allowLocalNoAuth,
 		WorkflowSpecDir:  opts.workflowDir,
+		FlowSpecDir:      opts.flowDir,
+		ToolSpecDir:      opts.toolDir,
 		ProviderEnvFile:  opts.providerEnvFile,
 		PromptSpecDir:    opts.promptDir,
 	})
@@ -258,6 +266,14 @@ func parseUIArgs(args []string, remoteMode bool) uiOptions {
 	if workflowDir == "" {
 		workflowDir = "./.ai-agent/workflows"
 	}
+	flowDir := strings.TrimSpace(os.Getenv("AGENT_UI_FLOW_DIR"))
+	if flowDir == "" {
+		flowDir = "./.ai-agent/flows"
+	}
+	toolDir := strings.TrimSpace(os.Getenv("AGENT_UI_TOOL_DIR"))
+	if toolDir == "" {
+		toolDir = "./.ai-agent/tools"
+	}
 	providerEnvFile := strings.TrimSpace(os.Getenv("AGENT_UI_PROVIDER_ENV_FILE"))
 	if providerEnvFile == "" {
 		providerEnvFile = "./.ai-agent/provider_env.json"
@@ -275,6 +291,8 @@ func parseUIArgs(args []string, remoteMode bool) uiOptions {
 		dbPath:           dbPath,
 		attemptsPath:     attemptsPath,
 		workflowDir:      workflowDir,
+		flowDir:          flowDir,
+		toolDir:          toolDir,
 		providerEnvFile:  providerEnvFile,
 		promptDir:        promptDir,
 		redisAddr:        strings.TrimSpace(os.Getenv("AGENT_REDIS_ADDR")),
@@ -309,6 +327,10 @@ func parseUIArgs(args []string, remoteMode bool) uiOptions {
 			opts.attemptsPath = strings.TrimSpace(strings.TrimPrefix(arg, "--ui-attempts-db-path="))
 		case strings.HasPrefix(arg, "--ui-workflow-dir="):
 			opts.workflowDir = strings.TrimSpace(strings.TrimPrefix(arg, "--ui-workflow-dir="))
+		case strings.HasPrefix(arg, "--ui-flow-dir="):
+			opts.flowDir = strings.TrimSpace(strings.TrimPrefix(arg, "--ui-flow-dir="))
+		case strings.HasPrefix(arg, "--ui-tool-dir="):
+			opts.toolDir = strings.TrimSpace(strings.TrimPrefix(arg, "--ui-tool-dir="))
 		case strings.HasPrefix(arg, "--ui-provider-env-file="):
 			opts.providerEnvFile = strings.TrimSpace(strings.TrimPrefix(arg, "--ui-provider-env-file="))
 		case strings.HasPrefix(arg, "--ui-prompt-dir="):
@@ -356,6 +378,87 @@ func loadWorkflowSpecs(dir string) {
 				continue
 			}
 			log.Printf("workflow spec %s registration failed: %v", path, regErr)
+		}
+	}
+}
+
+func loadFlowSpecs(dir string) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		log.Printf("flow specs unavailable: %v", err)
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(entry.Name()))
+		if !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			log.Printf("flow spec %s skipped: %v", path, readErr)
+			continue
+		}
+		var def flow.Definition
+		if unmarshalErr := json.Unmarshal(raw, &def); unmarshalErr != nil {
+			log.Printf("flow spec %s skipped: %v", path, unmarshalErr)
+			continue
+		}
+		def.Name = strings.TrimSpace(def.Name)
+		if def.Name == "" {
+			log.Printf("flow spec %s skipped: missing name", path)
+			continue
+		}
+		if regErr := flow.Upsert(&def); regErr != nil {
+			log.Printf("flow spec %s registration failed: %v", path, regErr)
+		}
+	}
+}
+
+func loadCustomToolSpecs(dir string) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		log.Printf("custom tool specs unavailable: %v", err)
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(entry.Name()))
+		if !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			log.Printf("custom tool spec %s skipped: %v", path, readErr)
+			continue
+		}
+		var spec tools.CustomHTTPSpec
+		if unmarshalErr := json.Unmarshal(raw, &spec); unmarshalErr != nil {
+			log.Printf("custom tool spec %s skipped: %v", path, unmarshalErr)
+			continue
+		}
+		if regErr := tools.UpsertCustomHTTPTool(spec); regErr != nil {
+			log.Printf("custom tool spec %s registration failed: %v", path, regErr)
 		}
 	}
 }

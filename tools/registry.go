@@ -117,6 +117,32 @@ func ToolNames() []string {
 	return out
 }
 
+func ToolExists(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	regMu.RLock()
+	defer regMu.RUnlock()
+	_, ok := toolFactories[name]
+	return ok
+}
+
+func RemoveTool(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	regMu.Lock()
+	defer regMu.Unlock()
+	if _, ok := toolFactories[name]; !ok {
+		return false
+	}
+	delete(toolFactories, name)
+	delete(toolDescs, name)
+	return true
+}
+
 func BundleNames() []string {
 	regMu.RLock()
 	defer regMu.RUnlock()

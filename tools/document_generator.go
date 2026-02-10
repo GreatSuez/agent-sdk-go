@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/PipeOpsHQ/agent-sdk-go/framework/storage"
 )
 
 type documentSection struct {
@@ -24,12 +24,13 @@ type documentGeneratorArgs struct {
 }
 
 type documentGeneratorResult struct {
-	DocType    string `json:"doc_type"`
-	Format     string `json:"format"`
-	Title      string `json:"title"`
-	Content    string `json:"content"`
-	OutputPath string `json:"output_path,omitempty"`
-	Bytes      int    `json:"bytes"`
+	DocType    string              `json:"doc_type"`
+	Format     string              `json:"format"`
+	Title      string              `json:"title"`
+	Content    string              `json:"content"`
+	OutputPath string              `json:"output_path,omitempty"`
+	Bytes      int                 `json:"bytes"`
+	Backup     *storage.BackupInfo `json:"backup,omitempty"`
 }
 
 func NewDocumentGenerator() Tool {
@@ -66,7 +67,7 @@ func NewDocumentGenerator() Tool {
 			},
 			"output_path": map[string]any{
 				"type":        "string",
-				"description": "Optional file path to save generated document.",
+				"description": "Optional file path. Relative paths are saved under AGENT_STORAGE_DIR (default ./.ai-agent/generated).",
 			},
 		},
 		"required": []string{"title"},
@@ -77,7 +78,6 @@ func NewDocumentGenerator() Tool {
 		"Generate structured documents (plan/report/rfc/runbook/notes) in markdown, text, or html and optionally save to file.",
 		schema,
 		func(ctx context.Context, args json.RawMessage) (any, error) {
-			_ = ctx
 			var in documentGeneratorArgs
 			if err := json.Unmarshal(args, &in); err != nil {
 				return nil, fmt.Errorf("invalid document_generator args: %w", err)
@@ -113,18 +113,39 @@ func NewDocumentGenerator() Tool {
 			}
 
 			if path := strings.TrimSpace(in.OutputPath); path != "" {
-				if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-					return nil, fmt.Errorf("create output directory: %w", err)
-				}
-				if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+				saved, err := storage.Default().SaveBytes(ctx, path, defaultDocumentFileName(title, format), []byte(content))
+				if err != nil {
 					return nil, fmt.Errorf("write document: %w", err)
 				}
-				result.OutputPath = path
+				result.OutputPath = saved.Path
+				result.Backup = saved.Backup
+			} else {
+				saved, err := storage.Default().SaveBytes(ctx, "", defaultDocumentFileName(title, format), []byte(content))
+				if err != nil {
+					return nil, fmt.Errorf("write document: %w", err)
+				}
+				result.OutputPath = saved.Path
+				result.Backup = saved.Backup
 			}
 
 			return result, nil
 		},
 	)
+}
+
+func defaultDocumentFileName(title, format string) string {
+	base := strings.TrimSpace(strings.ToLower(title))
+	if base == "" {
+		base = "document"
+	}
+	base = strings.ReplaceAll(base, " ", "-")
+	if format == "html" {
+		return base + ".html"
+	}
+	if format == "text" {
+		return base + ".txt"
+	}
+	return base + ".md"
 }
 
 func defaultSectionsForType(docType string) []documentSection {
