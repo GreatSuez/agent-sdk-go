@@ -18,6 +18,13 @@ It combines:
 - Examples:
   - `go run ./cmd/agent-framework run -- "hello"`
   - `go run ./cmd/agent-framework ui`
+  - `go run ./cmd/agent-framework eval --dataset=./evals/security.jsonl --fail-under=90 --workers=4 --retries=1`
+  - `go run ./cmd/agent-framework eval --dataset=./evals/security.jsonl --judge --judge-rubric="Correctness and safety" --judge-min-score=0.75`
+
+Eval dataset notes (`.jsonl`):
+- each line is a case with `input` plus optional `expectedOutput`, `requiredTools`, `forbiddenTools`, `assertions`, `tags`, `metadata`
+- optional rubric scoring fields: `judgeRubric`, `minJudgeScore`
+- assertions support: `contains`, `regex`, `equals`, `json_valid`, `json_schema`
 
 ### 1) Runtime Core
 - Agent loop with iterative reasoning + tool invocation

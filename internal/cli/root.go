@@ -33,6 +33,8 @@ func Run(ctx context.Context, args []string) {
 		runCronCLI(ctx, args[1:])
 	case "skill":
 		runSkillCLI(args[1:])
+	case "eval":
+		runEvalCLI(ctx, args[1:])
 	case "help", "-h", "--help":
 		printUsage()
 	default:

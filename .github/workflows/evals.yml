@@ -1,0 +1,60 @@
+name: Evals
+
+on:
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'eval/**'
+      - 'evals/**'
+      - 'internal/cli/eval.go'
+      - 'cmd/**'
+      - '.github/workflows/evals.yml'
+      - 'go.mod'
+      - 'go.sum'
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    name: Run Eval Dataset
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+
+    env:
+      GOFLAGS: -mod=mod
+      AGENT_PROVIDER: gemini
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      EVAL_DATASET: ./evals/security.jsonl
+      EVAL_FAIL_UNDER: '70'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.11'
+          cache: true
+
+      - name: Run threshold-gated evals
+        if: env.GEMINI_API_KEY != ''
+        run: |
+          go run ./cmd/agent-framework eval \
+            --dataset="${EVAL_DATASET}" \
+            --workers=4 \
+            --retries=1 \
+            --retry-backoff-ms=500 \
+            --judge \
+            --fail-under="${EVAL_FAIL_UNDER}" \
+            --output=markdown
+
+      - name: Missing API key notice
+        if: env.GEMINI_API_KEY == ''
+        run: echo "GEMINI_API_KEY is not set; eval job skipped"
