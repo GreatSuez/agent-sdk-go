@@ -206,7 +206,7 @@ func readInput(args []string) (string, error) {
 		}
 		return string(b), nil
 	}
-	return "", fmt.Errorf("usage: go run . <trivy-json-or-log-file> OR cat file | go run .")
+	return "", fmt.Errorf("usage: go run <target> <trivy-json-or-log-file> OR cat file | go run <target>")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
